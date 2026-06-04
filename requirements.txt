@@ -1,3 +1,6 @@
 pyspark
 findspark
 pandas
+google-cloud-storage
+gcsfs
+python-dotenv
