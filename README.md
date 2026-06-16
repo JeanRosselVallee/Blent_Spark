@@ -15,9 +15,11 @@ Create Bucket "blent_spark_bucket"
 import input file under data/raw/
 
 ### 1. Automated Setup & Authentication
-Run the master setup script to initialize your environment (venv_spark), install dependencies, and authenticate your GCP account:
+Run the master setup script to initialize your environment (venv_spark), install dependencies, and authenticate your GCP account. 
+
+**Note:** We use `source` so that the environment variables (like the GCloud PATH) are applied to your current terminal session immediately:
 ```bash
-chmod +x setup_env_gcs.sh && ./setup_env_gcs.sh
+chmod +x set_env.sh && source set_env.sh
 ```
 *Note: This will open your browser twice to log in to your Google Account.*
 
@@ -44,3 +46,7 @@ python src/jobs/etl_gcs.py
 
 ### 4. Accessing Data in GCS
 The script uses the `gs://` protocol and configures Application Default Credentials (ADC), so no JSON key file is required for local development. It creates a `_SUCCESS` file in the output folder upon completion.
+
+---
+**Note sur le format des données :**
+Bien que le format CSV ait été choisi ici pour des raisons d'interopérabilité et de facilité de lecture de l'échantillon, dans un environnement de production à grande échelle, un passage au format Parquet serait fortement recommandé pour optimiser les coûts de stockage sur GCS et accélérer les requêtes futures.
