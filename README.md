@@ -8,42 +8,80 @@ git clone https://github.com/JeanRosselVallee/Blent_Spark.git
 ## 1. Prototyping (Step 1 Validation)
 The `src/jobs/nbook_prototype.ipynb` notebook validates the first step of the project: creating a Spark script on a data sample. It describes the step-by-step transformations required to obtain the final output table, using a sample of the data to ensure fast iterations and validation of the logic.
 
-## 2. GCP & Data Integration
+## 2. Local Unit Tests
+- Goal: validate locally (before deploying to the Cloud) the ETL transformation functions of the Python script `src/jobs/etl_job.py`.
+- Input: mock dataset `data/gold/mock_data.csv` 
+- Expected results: `data/gold/expected_output.csv`.
+- A Pytest report compares actual vs. expected results that show:
+  - a test's status (`PASSED` or `FAILED`) per feature
+  - the record location and the mismatched values
 
-To read data from Google Cloud Storage (GCS) instead of local files, follow these steps:
+**Run :**
+```bash
+# Activate the environment (if not already active)
+source venv_spark/bin/activate
 
-### Place input files in a GCS Bucket
-Create Bucket "blent_spark_bucket"
-import input file under data/raw/
+# Install dependencies
+pip install -r requirements.txt
 
-### 2.1. Automated Setup & Authentication
-Run the master setup script to initialize your environment (venv_spark), install dependencies, and authenticate your GCP account. 
+# Execute the test
+pytest tests/test_etl_job.py -vv --disable-warnings
+```
 
-**Note:** We use `source` so that the environment variables (like the GCloud PATH) are applied to your current terminal session immediately:
+## 3. GCP & Data Integration (Step 2 Validation)
+
+The Python-Spark script  `src/jobs/etl_job.py` validates the second step of the project:
+- it reads the input table from a GCS source
+- it accepts command-line arguments (`--SOURCE`, `--DESTINATION`, `--DATE_START`, `--DATE_END`)
+- it saves the processed output table in CSV format to a GCS target destination.
+
+### 3.1. Place Input Files in GCS
+Create a Google Cloud Storage bucket named `blent_spark_bucket` and upload your raw data files under the `data/raw/` path inside the bucket.
+
+### 3.2. Automated Setup & Authentication
+Run the master setup script to initialize your virtual environment (`venv_spark`), install dependencies, and authenticate your GCP account. 
+
+**Note:** We use `source` so that the environment variables (like the Google Cloud SDK paths) are applied to your current terminal session immediately:
 ```bash
 chmod +x set_env.sh && source set_env.sh
 ```
-*Note: This will open your browser twice to log in to your Google Account.*
+*Note: This will open your browser to log in to your Google Account.*
 
-### 2.2. Create a `.env` File
-Create an `.env` with the contents of .env.template. This file is used by the notebook and scripts to avoid hardcoding. It contains GCP & GCS configuration.
+### 3.3. Create a `.env` File
+Create a `.env` file using the template to avoid hardcoding configuration values:
 ```bash
-cp .env.template .env
+cp .env_template .env
 ```
 
-### 2.3. Running the ETL Script
-After setup and configuration, you can run the production-ready ETL script:
+### 3.4. Running the ETL Script (Job Parameterization)
+The [etl_job.py](src/jobs/etl_job.py) script is designed to accept parameter configurations at runtime.
+
+Activate the virtual environment first:
 ```bash
-# Activate the environment
 source venv_spark/bin/activate
-
-# Run the script
-python src/jobs/etl_job.py
 ```
 
-### 2.4. Accessing Data in GCS
-The script uses the `gs://` protocol and configures Application Default Credentials (ADC), so no JSON key file is required for local development. It creates a `_SUCCESS` file in the output folder upon completion.
+#### Run with Defaults (from `.env`):
+By default, the script reads `SOURCE` and `DESTINATION` from your `.env` configuration:
+```bash
+python -m src.jobs.etl_job
+```
+
+#### Run with Custom Parameter Override (Step 2 Requirement):
+You can override the source data, target destination, and date boundaries when launching the Spark job:
+```bash
+python -m src.jobs.etl_job \
+  --SOURCE "gs://blent_spark_bucket/data/raw/sample.csv" \
+  --DESTINATION "gs://blent_spark_bucket/data/processed/features_output" \
+  --DATE_START "2026-06-01 00:00:00" \
+  --DATE_END "2026-06-15 23:59:59"
+```
+
+### 3.5. Output Format and Verification
+Upon successful execution:
+* The resulting output table will be written in **CSV format** directly to the specified `--DESTINATION` path in your object storage.
+* Spark writes a `_SUCCESS` marker file in the destination folder once the write operation completes successfully.
 
 ---
-**Note sur le format des données :**
-Bien que le format CSV ait été choisi ici pour des raisons d'interopérabilité et de facilité de lecture de l'échantillon, dans un environnement de production à grande échelle, un passage au format Parquet serait fortement recommandé pour optimiser les coûts de stockage sur GCS et accélérer les requêtes futures.
+**Note on Data Formats:**
+While the CSV format is used here for interoperability and readability, in a high-throughput production environment, migrating to Parquet is highly recommended to optimize storage footprint on GCS/S3 and accelerate query speeds.
