@@ -5,3 +5,4 @@ google-cloud-storage
 gcsfs
 python-dotenv
 logging
+pytest

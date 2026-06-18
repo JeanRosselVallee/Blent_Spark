@@ -1,6 +1,7 @@
 .env
 venv_spark/
 data/
+__pycache__/
 
 
 # Ignore files under log/ but keep log/ itelf thanks to .gitkeep

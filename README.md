@@ -25,15 +25,10 @@ chmod +x set_env.sh && source set_env.sh
 ```
 *Note: This will open your browser twice to log in to your Google Account.*
 
-### 2.2. Configuration (.env)
-Create a `.env` file in the project root to store your GCP and GCS details. This file is used by the notebook and scripts to avoid hardcoding:
+### 2.2. Create a `.env` File
+Create an `.env` with the contents of .env.template. This file is used by the notebook and scripts to avoid hardcoding. It contains GCP & GCS configuration.
 ```bash
-# GCP Configuration
-GCP_PROJECT_ID=blent-sandbox-8950789090
-
-# GCS Storage Configuration
-GCS_BUCKET_NAME=dataproc-staging-us-central1-134288453953-pahddvko
-GCS_RAW_DATA_PATH=data/raw/sample.csv
+cp .env.template .env
 ```
 
 ### 2.3. Running the ETL Script
