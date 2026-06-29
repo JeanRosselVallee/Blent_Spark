@@ -11,16 +11,19 @@ Syntax 2 : less verbose
 import pandas as pd
 import pytest
 from pyspark.sql import functions as f
-from src.jobs.etl_job import extract, transform
+from src.etl_job import extract, transform
 
 
 # A fixture is a 1-shot function
 @pytest.fixture(scope="module")
-# ./conftest.py opened session "spark"
+# A session is opened by spark() (defined in ./conftest.py)
 def get_actual_and_expected_pdfs(spark):
 
-    INPUT_FILE_MOCK = "data/gold/mock_data.csv"
-    OUTPUT_FILE_EXPECTED = "data/gold/expected_output.csv"
+    BUCKET_FOLDER = "gs://blent_spark_bucket1/tests"
+    INPUT_FILE_MOCK = f"{BUCKET_FOLDER}/mock_data.csv"
+    OUTPUT_FILE_EXPECTED = f"{BUCKET_FOLDER}/expected_output.csv"
+    # INPUT_FILE_MOCK = "./mock_data.csv"
+    # OUTPUT_FILE_EXPECTED = "./expected_output.csv"
 
     # 1. Load input data using production code
     sdf_input = extract(spark, INPUT_FILE_MOCK)
@@ -34,11 +37,6 @@ def get_actual_and_expected_pdfs(spark):
 
     # 3. Load expected output data
     sdf_expected = extract(spark, OUTPUT_FILE_EXPECTED)
-    # sdf_expected = sdf_expected \
-    #     .withColumn(
-    #         "start_time", 
-    #         f.date_format(f.col("start_time"), "HH:mm")
-    #     )
 
     pdf_expected = sdf_expected.toPandas() \
         .reset_index() \
@@ -74,11 +72,11 @@ def test_field_equality(get_actual_and_expected_pdfs, field_name):
     - tests 1 field of actual pdf vs. expected pdf
     """
     pdf_actual, pdf_expected = get_actual_and_expected_pdfs
-    
+
     # Get a pdf with index & a single field
     pdf_actual = pdf_actual[[field_name]]
     pdf_expected = pdf_expected[[field_name]]
-    
+
     try:
         # Standard strict check
         pd.testing.assert_frame_equal(

@@ -9,7 +9,7 @@ Ce projet vise à mettre en place un pipeline complet d'ingénierie de données 
 
 ## Structure du Projet
 - `data/` : Contient les données (brutes, transformées, finales).
-- `src/` : Code source des jobs Spark.
+- `src/` : Code source.
 - `tests/` : Tests unitaires et d'intégration.
 - `config/` : Fichiers de configuration (YAML, JSON).
 - `docs/` : Documentation supplémentaire.

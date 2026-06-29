@@ -1,3 +1,11 @@
+## ToDo:
+- transfer 7 csv files from AWS to GCS
+- run 
+python -m src.etl_job --DATE_START="2019-12-15 00:00:00" --DATE_END="2020-01-15 00:00:00" --SOURCE="gs://blent_spark_bucket1/data/raw/sample.csv" --DESTINATION="gs://blent_spark_bucket1/data/processed"
+- rename log file + git add it
+- update README
+- release + validate project
+  
 # Blent Spark Project
 
 Data engineering pipeline using PySpark.
@@ -6,12 +14,12 @@ Data engineering pipeline using PySpark.
 git clone https://github.com/JeanRosselVallee/Blent_Spark.git
 
 ## 1. Prototyping (Step 1 Validation)
-The `src/jobs/nbook_prototype.ipynb` notebook validates the first step of the project: creating a Spark script on a data sample. It describes the step-by-step transformations required to obtain the final output table, using a sample of the data to ensure fast iterations and validation of the logic.
+The `src/nbook_prototype.ipynb` notebook validates the first step of the project: creating a Spark script on a data sample. It describes the step-by-step transformations required to obtain the final output table, using a sample of the data to ensure fast iterations and validation of the logic.
 
 ## 2. Local Unit Tests
-- Goal: validate locally (before deploying to the Cloud) the ETL transformation functions of the Python script `src/jobs/etl_job.py`.
-- Input: mock dataset `data/gold/mock_data.csv` 
-- Expected results: `data/gold/expected_output.csv`.
+- Goal: validate locally (before deploying to the Cloud) the ETL transformation functions of the Python script `src/etl_job.py`.
+- Input: mock dataset `tests/mock_data.csv` 
+- Expected results: `test/expected_output.csv`.
 - A Pytest report compares actual vs. expected results that show:
   - a test's status (`PASSED` or `FAILED`) per feature
   - the record location and the mismatched values
@@ -30,7 +38,7 @@ pytest tests/test_etl_job.py -vv --disable-warnings
 
 ## 3. GCP & Data Integration (Step 2 Validation)
 
-The Python-Spark script  `src/jobs/etl_job.py` validates the second step of the project:
+The Python-Spark script  `src/etl_job.py` validates the second step of the project:
 - it reads the input table from a GCS source
 - it accepts command-line arguments (`--SOURCE`, `--DESTINATION`, `--DATE_START`, `--DATE_END`)
 - it saves the processed output table in CSV format to a GCS target destination.
@@ -54,7 +62,7 @@ cp .env_template .env
 ```
 
 ### 3.4. Running the ETL Script (Job Parameterization)
-The [etl_job.py](src/jobs/etl_job.py) script is designed to accept parameter configurations at runtime.
+The [etl_job.py](src/etl_job.py) script is designed to accept parameter configurations at runtime.
 
 Activate the virtual environment first:
 ```bash
@@ -64,13 +72,13 @@ source venv_spark/bin/activate
 #### Run with Defaults (from `.env`):
 By default, the script reads `SOURCE` and `DESTINATION` from your `.env` configuration:
 ```bash
-python -m src.jobs.etl_job
+python -m src.etl_job
 ```
 
 #### Run with Custom Parameter Override (Step 2 Requirement):
 You can override the source data, target destination, and date boundaries when launching the Spark job:
 ```bash
-python -m src.jobs.etl_job \
+python -m src.etl_job \
   --SOURCE "gs://blent_spark_bucket/data/raw/sample.csv" \
   --DESTINATION "gs://blent_spark_bucket/data/processed/features_output" \
   --DATE_START "2026-06-01 00:00:00" \
