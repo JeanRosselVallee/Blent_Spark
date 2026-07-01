@@ -1,0 +1,20 @@
+ToDo
+Run on Blent's GCP
+- copy script to GCP
+- run job from terminal
+	- pass dates as arguments
+	- pass env vars as job's parameters
+
+upload job + 
+add missing messages logging
+try other months
+prepare mentoring
+add comments that explain why?
+remove session's unused 
+ - .config's
+ - spark log level
+Deal with #ToDo's
+Search how to run job on my account != blent's
+
+Done
+add timestamp to log messages
