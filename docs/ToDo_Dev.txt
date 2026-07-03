@@ -1,4 +1,8 @@
 ToDo
+update project_id & bucket name automatically in python
+setenv should return command line to run locally & on GCP
+make parameters in shell & python script coincide
+
 Run on Blent's GCP
 - copy script to GCP
 - run job from terminal
@@ -18,3 +22,4 @@ Search how to run job on my account != blent's
 
 Done
 add timestamp to log messages
+add return code to main if error

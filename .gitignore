@@ -2,7 +2,11 @@
 venv_spark/
 data/
 __pycache__/
+credentials.json
 
+# Custom files
+ToDo*.*
+old_*.*
 
 # Ignore files under log/ but keep log/ itelf thanks to .gitkeep
 log/*

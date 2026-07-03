@@ -10,32 +10,40 @@ Pre-requisites:
     - For a local execution, run setup_env_gcs.sh to 
         - set env for Python & GCS
         - login to GCP project
-Syntax:
+1. Local execution:
     python -m src.etl_job <arguments>
     arguments:
     - GCS path to output directory (default from env): --DESTINATION
     - date filters : --DATE_START, --DATE_END
+2. Execution in GCP Dataproc cluster:
+gcloud dataproc jobs submit pyspark \
+    $JOB_PATH \
+    --cluster=$CLUSTER \
+    --region=$REGION \
+    --properties="spark.yarn.appMasterEnv.BUCKET_NAME=blent_spark_bucket2" \
+    --files="gs://blent_spark_bucket2/config/credentials.json"
+    
 """
 
 import os
 import logging
 import argparse
 import time
-import requests
+import sys
+import google.auth
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as f
 from gcsfs import GCSFileSystem
-from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from google.cloud import storage
-from google.cloud import storage_transfer_v1
 from dataclasses import dataclass
+from typing import List
 
 
 # Set Logging Configuration
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s: %(message)s"
+    format="▶️ %(asctime)s: %(message)s"
 )
 
 # AWS source files' dir
@@ -46,8 +54,8 @@ AWS_URL_DIR = "https://blent-learning-user-ressources.s3.eu-west-3." + \
 # GCS Storage variables
 
 gcs_dict = {
-    "PROJECT_ID": "blent-sandbox-8750844175",
-    "BUCKET_NAME": "blent_spark_bucket1",
+    "PROJECT_ID": google.auth.default()[1],
+    "BUCKET_NAME": os.getenv("BUCKET_NAME", "blent_spark_bucket4"),
     "INPUT_REL_DIR": "data/raw",
     "OUTPUT_REL_DIR": "data/processed",
     "storage": storage.Client(),
@@ -70,7 +78,7 @@ class GCS:
     OUTPUT_REL_DIR: str
     storage: storage.Client
     API_URL: str
-    file_paths: list[str]
+    file_paths: List[str]
 
 
 gcs = GCS(**gcs_dict)
@@ -130,15 +138,7 @@ def transfer_raw_files(args, gcs):
     # - If not, create a TSV file with the list of pending URLs
     # - Entirely performed in the Master Node
 
-    import sys
-    import subprocess
-
-    # Install Storage transfer module only in Master Node
-    subprocess.check_call([
-        sys.executable,  # executes Python
-        "-m", "pip", "install", "--quiet",
-        "google-cloud-storage-transfer==1.21.0"
-    ])
+    from datetime import datetime, timezone
 
     # Sub-Functions of transfer_raw_files()
 
@@ -168,9 +168,12 @@ def transfer_raw_files(args, gcs):
     def get_pending_and_set_expected_files(gcs, input_filenames):
         # Goal: get both,
         # - gcs_file_paths: files already available in the bucket
-        # - aws_pending_urls: files "pending" or missing in the bucket 
+        # - aws_pending_urls: files "pending" or missing in the bucket
+
+        import requests
 
         aws_pending_urls = []
+        tsv_contents = []
         for name in input_filenames:
             # Check source is available in Bucket
             gcs_file_abs_path = f"{gcs.INPUT_ABS_DIR}/{name}"
@@ -183,6 +186,9 @@ def transfer_raw_files(args, gcs):
             else:
                 logging.info(f"📝 File {name} is pending")
 
+                # ToDo: delete this mock file
+                name = "sample.csv"
+
                 # Check source is available in S3
                 url_file = f"{AWS_URL_DIR}/{name}"
                 response = requests.head(
@@ -194,68 +200,116 @@ def transfer_raw_files(args, gcs):
                     raise FileNotFoundError(f"❌ URL {url_file} not valid")
 
                 aws_pending_urls.append(url_file)
+                file_size = response.headers.get("Content-Length", "1000")
+                tsv_contents.append(f"{url_file}\t{file_size}")
 
-        return aws_pending_urls
+        return aws_pending_urls, tsv_contents
 
-    def create_tsv_file(gcs, aws_pending_urls):
+    def create_tsv_file(gcs, tsv_contents):
         # Create list of pending URLs as a TSV file (STS requirement)
         tsv_content = \
-            "TsvHttpData-1.0\n" + "\n".join(aws_pending_urls) + "\n"
-        tsv_filename = "aws_pending_urls.tsv"
+            "TsvHttpData-1.0\n" + "\n".join(tsv_contents) + "\n"
+        #tsv_filename = "aws_pending_urls.tsv"
+        tsv_filename = "tsv/aws_pending_urls.tsv"
         tsv_pointer = gcs.bucket.blob(tsv_filename)
         tsv_pointer.upload_from_string(
             tsv_content,
-            content_type="text/tab-separatede-values"
+            content_type="text/tab-separated-values",
+            predefined_acl="publicRead"
         )
+        #tsv_url = f"{gcs.API_URL}/{gcs.BUCKET_NAME}/{tsv_filename}"
         tsv_url = f"{gcs.API_URL}/{gcs.BUCKET_NAME}/{tsv_filename}"
         logging.info(f"Created list of URLs to download at: {tsv_url}")
         return tsv_url
 
     def transfer_files_from_aws_to_gcs(gcs, tsv_url):
+        from google.oauth2 import service_account
+
+        import subprocess
+        # Install Storage transfer module only in Master Node
+        subprocess.check_call([
+            sys.executable,  # executes Python
+            "-m", "pip", "install", "--quiet",
+            "google-cloud-storage-transfer==1.19.0",
+            "--no-deps"  # leaves core GCS modules untouched
+        ])
+        from google.cloud import storage_transfer_v1
+
         # Define Trasfer Job
-        today = datetime.datetime.utcnow()
-        today_as_dict = \
-            {"year": today.year, "month": today.month, "day": today.day}
+        # today = datetime.now(timezone.utc)
+        # today_as_dict = \
+        #     {"year": today.year, "month": today.month, "day": today.day}
+
+        # Define Trasfer Job Name
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        job_name = f"transferJobs/project_{gcs.PROJECT_ID}_{timestamp}"
+
         transfer_job_definition = {
+            "name": job_name,
             "project_id": gcs.PROJECT_ID,
             "status": storage_transfer_v1.TransferJob.Status.ENABLED,
-            "description": "Pending Files' Cloud Transfer",
+            "description": "Cloud-Transfer of Raw Files",
+            "logging_config": {
+                "log_actions": ["FIND", "COPY", "DELETE"],
+                "log_action_states": ["SUCCEEDED", "FAILED"]
+            },
             "transfer_spec": {
                 "http_data_source": {
                     "list_url": tsv_url  # ************* Source
                 },
-                "gcs_sink": {
-                    "bucket_name": gcs.BUCKET_NAME  # Destination
+                "gcs_data_sink": {
+                    "bucket_name": gcs.BUCKET_NAME,  # Destination
+                    "path": gcs.INPUT_REL_DIR + "/"
                 }
             },
-            "schedule": {  # Runs immediately
-                "schedule_start_date": today_as_dict,
-                "schedule_end_date": today_as_dict
-            }
+            # "schedule": {  # Runs immediately
+            #     "schedule_start_date": today_as_dict,
+            #     "schedule_end_date": today_as_dict
+            # }
         }
 
+        # ToDo: Update these comments
+        # 1. Explicitly load the credentials file at runtime
+        client_credentials = service_account.Credentials \
+            .from_service_account_file('credentials.json')
+        # 2. Pass the credentials directly into your client
+        client = storage_transfer_v1 \
+            .StorageTransferServiceClient(credentials=client_credentials)
+        # 3. Submit your job definition exactly like before
+     
         # Run Transfer Job
         transfer = {
-            "client": storage_transfer_v1.StorageTransferServiceClient()
+            "job_name": job_name,
+            "client": client
+            # "client": storage_transfer_v1.StorageTransferServiceClient()
         }
-        transfer["job"] = transfer["client"].create_transfer_job(
-            {"transfer_job": transfer_job_definition}
-        )
-        transfer["job_name"] = transfer["job"].name
-
-        logging.info("🚀 Started File Transfer Job:" + transfer["job_name"])
-        transfer["client"].run_transfer_job({
-            "job_name": transfer["job_name"],
-            "project_id": gcs.PROJECT_ID
+        # transfer["job"] = transfer["client"].create_transfer_job({
+        transfer["client"].create_transfer_job({
+            "transfer_job": transfer_job_definition
         })
+
+        # transfer["job_name"] = transfer["job"].name
+
+        # logging.info("🚀 Started File Transfer Job:" + transfer["job_name"])
+        logging.info(f"🚀 Started File Transfer Job: {job_name}")
+        transfer["client"] \
+            .run_transfer_job({
+                "job_name": job_name,
+                "project_id": gcs.PROJECT_ID
+            })
 
         return transfer
 
     def monitor_transfer(gcs, transfer):
         # Monitor progress of transfer operations
-        print("⏳ Monitoring cloud transfer... (0% Spark hardware usage)")
+
+        from google.protobuf.json_format import MessageToDict
+
+        logging.info("⏳ Monitoring cloud transfer... (0% Spark hardware usage)")
         operations_client = transfer["client"].transport.operations_client
+
         while True:
+
             try:  # inner try: to catch up at next operation
                 # Update job status
                 transfer_job_updated = transfer["client"] \
@@ -263,7 +317,7 @@ def transfer_raw_files(args, gcs):
                         "job_name": transfer["job_name"],
                         "project_id": gcs.PROJECT_ID
                     })
-                
+
                 # Get current operation status
                 current_operation_name = transfer_job_updated \
                     .latest_operation_name
@@ -279,6 +333,11 @@ def transfer_raw_files(args, gcs):
                     else:
                         # Phase 3. Conclusion
                         logging.info("✅ Transfer completed!")
+                        # Parse the operation metadata
+                        if current_operation.metadata:
+                            metadata_dict = MessageToDict(current_operation.metadata)
+                            counters = metadata_dict.get("counters", {})
+                            logging.info(f"📊 Transfer Summary: {counters}")
                         break
 
                 time.sleep(15)  # Check every 15 seconds
@@ -292,14 +351,14 @@ def transfer_raw_files(args, gcs):
     input_filenames = get_input_filenames(args)
 
     # 2. Get names of files missing in Bucket
-    aws_pending_urls = get_pending_and_set_expected_files(
+    aws_pending_urls, tsv_contents = get_pending_and_set_expected_files(
         gcs,
         input_filenames
     )
 
     # 3. Transfer pending sources to Bucket via Storage Transfer Service
-    if len(aws_pending_urls) > 0:
-        tsv_url = create_tsv_file(gcs, aws_pending_urls)
+    if len(tsv_contents) > 0:
+        tsv_url = create_tsv_file(gcs, tsv_contents)
         transfer = transfer_files_from_aws_to_gcs(gcs, tsv_url)
 
         # Monitor progress of transfer operations
@@ -598,13 +657,14 @@ def main(defaults, gcs):
 
     except Exception as e:
         logging.error(f"❌ Source files aren't available, \n {e}")
-        return
+        sys.exit(1)
 
     # 2. Create Spark Session
     spark = create_spark_session(project_id)
 
     # 3. ETL Job
     logging.info("🚀 Starting ETL Job...")
+    exception_caught = 0
     try:
         # 3.1. Extract
         sdf_fact_table = extract(
@@ -629,10 +689,12 @@ def main(defaults, gcs):
 
     except Exception as e:
         logging.error(f"❌ ETL Job Failed: {e}")
+        exception_caught = 1
 
     finally:
         # 4. Close spark session
         spark.stop()
+        sys.exit(exception_caught)
 
 
 if __name__ == "__main__":
