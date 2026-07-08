@@ -1,6 +1,6 @@
 import pytest
 from pyspark.sql import SparkSession
-from src.etl_job import create_spark_session
+from old.old_etl_job import create_spark_session
 
 
 @pytest.fixture(scope="session")

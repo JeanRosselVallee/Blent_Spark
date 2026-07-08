@@ -11,7 +11,7 @@ Syntax 2 : less verbose
 import pandas as pd
 import pytest
 from pyspark.sql import functions as f
-from src.etl_job import extract, transform
+from old.old_etl_job import extract, transform
 
 
 # A fixture is a 1-shot function
