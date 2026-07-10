@@ -1,24 +1,27 @@
 ToDo
-update project_id & bucket name automatically in python
 setenv should return command line to run locally & on GCP
-make parameters in shell & python script coincide
 
-Run on Blent's GCP
-- copy script to GCP
-- run job from terminal
-	- pass dates as arguments
-	- pass env vars as job's parameters
-
-upload job + 
 add missing messages logging
-try other months
-prepare mentoring
 add comments that explain why?
 remove session's unused 
  - .config's
- - spark log level
 Deal with #ToDo's
 Search how to run job on my account != blent's
+
+ToDo: 
+- Create script to run all : setup's & jobs
+- Test on 2 months
+- Homogenize both scripts format & practices
+- use lib_common for dataclass, log, parser ?
+- add links to sts + spark web pages: bucket, roles, jobs
+- copy spark portion of etl_job
+- get list of files' paths != tsv
+- get parameters: Project ID, Bucket Name, GCS relative path
+- get parameters: start_date, end_date, destination
+- write ReadMe & Docs
+
+ - spark log level
+
 
 Done
 add timestamp to log messages

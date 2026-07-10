@@ -1,42 +1,55 @@
 #!/bin/bash
 
 # Goal: 
-# - Setup Google Cloud Storage transfer environment for HTTP-to-GCS data transfer.
+# - Setup Google Cloud Storage environment for 
+#   - HTTP-to-GCS data transfer.
+#   - Spark job execution in a Dataproc cluster.
 #
-# This script automates the complete setup required for transferring files from
+# Key Features:
+# - Authenticates user to use GC CLI and provides ADC for API calls from the app
+# - Automates the complete setup required for transferring files from
 # public HTTP URLs to a GCS bucket using Storage Transfer Service (STS).
+# - Project config, IAM roles, bucket creation, Master SA key, STS agent configuration.
 #
-# Prerequisites:
-# - gcloud CLI installed and configured
-# - src/config.ini containing BUCKET_NAME
-# - User must have project-level IAM permissions
+# Prerequisites: 
+# - gcloud CLI, src/config.ini, project IAM permissions.
 #
-# Outputs:
-# - credentials.json (service account key for Master)
-# - Bucket with proper IAM bindings
-# - STS agent ready to execute transfer jobs
-
-# Usage: ./set_sts_env.sh
+# Outputs: credentials.json, configured bucket, STS agent, ADC Application Credentials.
+#
+# Usage: 
+# ./setup_data_services.sh
 
 # __________________________ Debug Functions ______________________
 
-print() {  # Print Log messages in green
+print() {  
+    # Print Log messages in green
+    
     MESSAGE=$1  
     GREEN='\033[0;32m'
     NC='\033[0m' # No Color (Reset)
     echo -e "${GREEN}${MESSAGE}${NC}"    
 }
 
-run_cmd(){  # Run command, display it & exit on errors
+run_cmd(){  
+    # Run command, display it & exit on errors
+    # Commands whose failure is not critical, shouldn't call this function.
+
     COMMAND_STRING="$*"
-    print "$COMMAND_STRING" >&2 # output to STDERR
+    # The command string is redirected to the terminal as STDERR, 
+    # so that a variable can recover only the result of the command
+    print "$COMMAND_STRING" >&2 
     eval "$COMMAND_STRING"
+
     RETURN_CODE=$?
     if [ $RETURN_CODE -ne 0 ]; then
         print "❌ Exit on error." >&2
         exit 1
     fi
 }
+
+# _________________________ Main Execution __________________________ 
+
+print "--- Setup GC Storage environment for Transfer & Spark jobs---"
 
 # _____________________ Login to GCP & Get ADC ______________________
 
@@ -66,7 +79,7 @@ BUCKET_NAME=$(grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3)
 BUCKET_PATH="gs://$BUCKET_NAME"
 REGION=`gcloud config get-value dataproc/region`
 CMD="gcloud storage buckets create $BUCKET_PATH --location=$REGION"
-eval $CMD  # Avoids error in case bucket exists 
+eval "$CMD"  # Avoids error in case bucket exists 
 run_cmd "gcloud storage buckets describe $BUCKET_PATH"
 
 # _________ Enable Operator to access Bucket & assign Roles _________
@@ -80,9 +93,12 @@ run_cmd "gcloud storage buckets add-iam-policy-binding $BUCKET_PATH \
 # ____________________ Enable Master to manage Jobs _________________
 
 print "▶️ Step 5. Enable Master to manage Jobs via credentials"
-MASTER_ACCOUNT=`run_cmd 'gcloud iam service-accounts list \
- --filter="displayName:Compute Engine default service account" \
- --format="value(email)"'`
+MASTER_ACCOUNT=`run_cmd "gcloud iam service-accounts list \
+ --filter='displayName:Compute Engine default service account' \
+ --format='value(email)'"`
+# MASTER_ACCOUNT=`run_cmd 'gcloud iam service-accounts list \
+#  --filter="displayName:Compute Engine default service account" \
+#  --format="value(email)"'`
 
 run_cmd "gcloud iam service-accounts keys create credentials.json \
  --iam-account=$MASTER_ACCOUNT"

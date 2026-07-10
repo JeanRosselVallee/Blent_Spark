@@ -1,38 +1,44 @@
 """
-ToDo: 
-- Goal + Description
-- add links to sts + spark web pages: bucket, roles, jobs
-- copy spark portion of etl_job
-- get list of files' paths != tsv
-- get parameters: Project ID, Bucket Name, GCS relative path
-- get parameters: start_date, end_date, destination
+Goal: ETL-Process raw files in GCS Bucket using Spark
 
+Description: Sent to GCP Dataproc to run as a Spark job.
+
+Key Features:
+- Validates file availability in GCS Bucket
+- Read raw files from GCS Bucket as Spark DataFrames
+- Validates file schema
+- Processes raw files using Spark transformations
+- Writes processed files to GCS Bucket
+
+Pre-requisites:
+Upload required files to GCS Bucket:
+GCS_PATH="gs://blent_spark_bucket5"
+FILEPATHS="src/config.ini src/job_spark.py src/lib_common.py credentials.json"
+for PATH_i in $FILEPATHS; do
+    gcloud storage cp ./$PATH_i $GCS_PATH/$PATH_i
+done
 
 Usage:
-gcloud dataproc jobs submit pyspark gs://blent_spark_bucket5/src/job_spark.py \
+gcloud dataproc jobs submit pyspark $GCS_PATH/src/job_spark.py \
 --cluster=main-cluster --region=us-central1 \
---files="gs://blent_spark_bucket/...,gs://blent_spark_bucket/..." \
--- --DATE_START="2019-10-01 00:00:00" --DATE_END="2019-10-16 00:00:00"
-optionally for env variables
---properties="spark.yarn.appMasterEnv.BUCKET_NAME=blent_spark_bucket5" \
+--files="$GCS_PATH/credentials.json,$GCS_PATH/src/config.ini" \
+--py-files="$GCS_PATH/src/lib_common.py" -- \
+--DATE_START="2019-10-01 00:00:00" --DATE_END="2019-10-16 00:00:00"
 
+For future use, it's possible to pass env variables
+--properties="spark.yarn.appMasterEnv.ENV_VARIABLE=env_value" \
 """
 
 import logging
-import argparse
 import configparser
 import os
 import sys
-import google.auth
-from google.cloud import storage
-from dataclasses import dataclass
-from datetime import datetime
-from dateutil.relativedelta import relativedelta
-from typing import List
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as f
 from pyspark.sql.types import StructType, StructField, StringType
 from gcsfs import GCSFileSystem
+from lib_common import GCS, init_gcs_from_dict, setup_logging, parse_args, \
+                        list_files_to_process, search_file_in_bucket
 
 
 # ____________________ Variables Initialization _____________________
@@ -47,95 +53,9 @@ config.read("config.ini")  # Production remote execution
 
 # Configure Logging
 logging.basicConfig(
-    level=config.get("LOGGING", "level"),
-    format=config.get("LOGGING", "format")
+    level=config.get("LOGGING", "LOG_LEVEL"),
+    format=config.get("LOGGING", "LOG_FORMAT")
 )
-
-# Set GCS values
-
-
-@dataclass
-class GCS:
-    PROJECT_ID: str
-    CREDENTIALS: google.auth.credentials.Credentials
-    BUCKET_NAME: str
-    bucket: storage.bucket
-    GCS_BASE_DIR: str
-    GCS_ABS_RAW_DIR: str
-    GCS_REL_RAW_DIR: str
-    storage: storage.Client
-    API_URL: str
-    file_paths: List[str]
-
-
-gcs_dict = {
-    "BUCKET_NAME": config.get("STORAGE", "BUCKET_NAME"),
-    "GCS_REL_RAW_DIR": "",
-    "GCS_ABS_RAW_DIR": "",
-    "storage": storage.Client(),
-    "API_URL": "https://storage.googleapis.com",
-    "file_paths": []
-}
-# _, gcs_dict["PROJECT_ID"] = google.auth.default()
-# Get the numerical project ID from ADC
-gcs_dict["CREDENTIALS"], gcs_dict["PROJECT_ID"] = google.auth.default()
-gcs_dict["GCS_BASE_DIR"] = "gs://" + gcs_dict["BUCKET_NAME"]
-gcs_dict["bucket"] = gcs_dict["storage"].bucket(gcs_dict["BUCKET_NAME"])
-
-gcs = GCS(**gcs_dict)
-
-
-def parse_args(
-    config: configparser.ConfigParser,
-    gcs: GCS
-) -> argparse.Namespace:
-    # Goal:
-    # - get arguments from command line & config file
-    # - set help description & list active parameters
-
-    # Read default values from config file
-    deft_raw_dir = config.get("SPARK_SCRIPT_DEFAULTS", "GCS_REL_RAW_DIR")
-    deft_start_date = config.get("SPARK_SCRIPT_DEFAULTS", "DATE_START")
-    deft_end_date = config.get("SPARK_SCRIPT_DEFAULTS", "DATE_END")
-    DATE_FORMAT = config.get("GENERAL", "HELP_DATE_FORMAT")
-    deft_out_dir = gcs.GCS_BASE_DIR + "/" + \
-        config.get("SPARK_SCRIPT_DEFAULTS", "GCS_REL_PROCESSED_DIR")
-
-    parser = argparse.ArgumentParser(
-        description="Cloud-Transfer Raw Files"
-    )
-    parser.add_argument(
-        "--GCS_REL_RAW_DIR",
-        type=str,
-        default=deft_raw_dir,
-        help=f"GCS path to output dir (default: {deft_raw_dir})"
-    )
-    parser.add_argument(
-        "--DESTINATION",
-        type=str,
-        default=deft_out_dir,
-        help=f"GCS path to output dir (default: {deft_out_dir})"
-    )
-    parser.add_argument(
-        "--DATE_START",
-        type=str,
-        default=deft_start_date,
-        help=f"Start date ({DATE_FORMAT} default: {deft_start_date})"
-    )
-    parser.add_argument(
-        "--DATE_END",
-        type=str,
-        default=deft_end_date,
-        help=f"End date ({DATE_FORMAT} default: {deft_end_date})"
-    )
-    args = parser.parse_args()
-
-    # Summary List of Active Parameters
-    logging.info("🔧 Active Parameters:")
-    args_dict = vars(args)
-    [logging.info(f"  • {key}: {val}") for key, val in args_dict.items()]
-
-    return args
 
 
 def create_spark_session(project_id):
@@ -180,35 +100,6 @@ def create_spark_session(project_id):
     return spark
 
 
-def list_files_to_process(args: argparse.Namespace) -> List[str]:
-    # Goal: Get list of files to process from the input date range
-
-    # Convert date strings to datetime
-    date_format = config.get("STORAGE", "date_format")
-
-    try:
-        start_dt = datetime.strptime(args.DATE_START, date_format)
-        end_dt = datetime.strptime(args.DATE_END, date_format)
-    except ValueError as e:
-        raise ValueError(f"Invalid date format: {e}")
-    if start_dt > end_dt:
-        raise ValueError("DATE_START must be before DATE_END.")
-
-    # Get filenames covering months to process
-    filenames = []
-    temp_dt = start_dt
-    while temp_dt <= end_dt:
-        month = temp_dt.strftime("%Y-%b")
-        filename = f"{month}.csv"
-        filenames.append(filename)  # Ex. 2026-Jan.csv
-        temp_dt += relativedelta(months=1)  # increments to next month
-
-    # ToDo: delete this mock file
-    # filenames = ["sample.csv"]
-
-    return filenames
-
-
 def log_count(sdf_in, step_name):
     logging.info(f"✅ {sdf_in.count()} rows after {step_name}.")
 
@@ -235,7 +126,7 @@ def extract(gcs, spark, filenames):
     input_path: 1 file or list in local storage, AWS S3, GCS Buckets
     """
 
-    gcs.GCS_ABS_RAW_DIR = f"{gcs.GCS_BASE_DIR}/{gcs.GCS_REL_RAW_DIR}"
+    gcs.GCS_ABS_RAW_DIR = f"{gcs.BASE_DIR}/{gcs.REL_RAW_DIR}"
     filepaths = [f"{gcs.GCS_ABS_RAW_DIR}/{filename}" for filename in filenames]
     logging.info(f"📥 Extracting data from: {filepaths}...")
 
@@ -253,11 +144,11 @@ def extract(gcs, spark, filenames):
     return spark_df
 
 
-def transform(sdf, date_start=None, date_stop=None):
+# def transform(sdf, date_start=None, date_stop=None):
+def transform(sdf, args):
     """
     3. Transformation: Feature Engineering
     """
-    logging.info("⚙️ Transforming data...")
 
     def clean_data(sdf_in):
         """
@@ -319,7 +210,7 @@ def transform(sdf, date_start=None, date_stop=None):
 
         sdf_out = sdf_per_session \
             .withColumn(
-                "start_time", 
+                "start_time",
                 f.date_format(f.col("temp_start_dt"), "HH:mm")
             ) \
             .withColumn(
@@ -369,6 +260,10 @@ def transform(sdf, date_start=None, date_stop=None):
 
         return sdf_out
 
+    # Body of transform()
+
+    logging.info("⚙️ Transforming data...")
+    date_start, date_stop = args.DATE_START, args.DATE_END
 
     # 1. Clean Data
     sdf = clean_data(sdf)
@@ -434,46 +329,42 @@ def load(sdf, output_path):
             logging.info(f"   • {file}")
 
 
-def main(defaults, gcs):
+def main(config):
 
-    # 1. Parse arguments using defaults
-    args = parse_args(config, gcs)
-    gcs.GCS_REL_RAW_DIR = args.GCS_REL_RAW_DIR
+    setup_logging(config)
+    logging.info("🚀 Starting Spark Job")
 
-    try:
-        # 4. Make source files available in Bucket
-        selected_files = list_files_to_process(args)
+    # 1. Parse arguments using defaults from config.ini
+    gcs_dict = init_gcs_from_dict(config)
+    gcs = GCS(**gcs_dict)
+    args = parse_args(config, gcs.BASE_DIR, "Spark Job")
+    gcs.REL_RAW_DIR = args.REL_RAW_DIR
 
-    except Exception as e:
-        logging.error(f"❌ Source files aren't available, \n {e}")
-        sys.exit(1)
+    # 2. Verify presence of source files in Bucket
+    selected_files = list_files_to_process(args, config)
+    for filename in selected_files:
+        file_found_in_bucket = search_file_in_bucket(gcs, filename)
+        if not file_found_in_bucket:
+            logging.error("❌ Source files aren't available.")
+            sys.exit(1)
+    logging.info(f"✅ Source files available in Bucket:\n{gcs.filepaths}")
 
-    # 2. Create Spark Session
+    # 3. Create Spark Session
     spark = create_spark_session(gcs.PROJECT_ID)
 
-    # 3. ETL Job
+    # 4. ETL Job
     logging.info("🚀 Starting ETL Job...")
     exception_caught = 0
     try:
-        # 3.1. Extract
-        sdf_fact_table = extract(
-            gcs,
-            spark,
-            selected_files
-        )
+        # 4.1. Extract
+        sdf_fact_table = extract(gcs, spark, selected_files)
 
-        # 3.2. Transform
-        sdf_feature_table = transform(
-            sdf_fact_table,
-            args.DATE_START,
-            args.DATE_END
-        )
+        # 4.2. Transform
+        # sdf_feature_table = transform(sdf_fact_table, args.DATE_START, args.DATE_END)
+        sdf_feature_table = transform(sdf_fact_table, args)
 
-        # 3.3. Load
-        load(
-            sdf_feature_table,
-            args.DESTINATION
-        )
+        # 4.3. Load
+        load(sdf_feature_table, args.DESTINATION)
 
         logging.info("🏁 ETL Job Finished.")
 
@@ -488,4 +379,4 @@ def main(defaults, gcs):
 
 
 if __name__ == "__main__":
-    main(config, gcs)
+    main(config)
