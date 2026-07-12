@@ -13,6 +13,7 @@
 #
 # Prerequisites: 
 # - gcloud CLI, src/config.ini, project IAM permissions.
+# - Operator user must have : Service Account Administrator, Service account user
 #
 # Outputs: credentials.json, configured bucket, STS agent, ADC Application Credentials.
 #
@@ -49,43 +50,55 @@ run_cmd(){
 
 # _________________________ Main Execution __________________________ 
 
-print "--- Setup GC Storage environment for Transfer & Spark jobs---"
+print "--- Setup GC Storage environment for Transfer & Spark jobs ---"
 
-# _____________________ Login to GCP & Get ADC ______________________
+# _____________________ Login to GC CLI ______________________
 
 print "▶️ Step 1: Enable Shell script to run GC CLI commands"
-run_cmd "gcloud auth login"
-# output: access token for CLI in 
-# updates "account" in ~/.config/gcloud/configurations/config_default
+run_cmd "gcloud auth login"  # output: access token for CLI
 
-print "▶️ Step 2. Enable Python app to call GC API methods"
-
-# Update "project" in local config_default
+# Get GCS Account Info
 PROJECT_ID=`run_cmd "gcloud projects list \
-    --filter='projectId:blent-sandbox-*' \
-    --format='value(projectId)' \
-    --limit=1"`
+--filter='projectId:blent-sandbox-*' \
+--format='value(projectId)' \
+--limit=1"`
+REGION=`grep "^REGION =" ./src/config.ini | cut -d" " -f 3`
+
+# Set up gcloud CLI configuration
 run_cmd "gcloud config set project '$PROJECT_ID'"
+run_cmd "gcloud config set dataproc/region '$REGION'"
+run_cmd "gcloud config set compute/region '$REGION'"
 run_cmd "gcloud config list"
 
-GCP_SCOPE=https://www.googleapis.com/auth/cloud-platform
-run_cmd "gcloud auth application-default login --scopes=$GCP_SCOPE"
-# output: ~/.config/gcloud/application_default_credentials.json for the app
 
 # ________________________ Create Bucket ____________________________
 
-print "▶️ Step 3. Create Bucket"
-BUCKET_NAME=$(grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3)
+print "▶️ Step 2. Create Bucket"
+BUCKET_NAME=`grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3`
 BUCKET_PATH="gs://$BUCKET_NAME"
 REGION=`gcloud config get-value dataproc/region`
 CMD="gcloud storage buckets create $BUCKET_PATH --location=$REGION"
 eval "$CMD"  # Avoids error in case bucket exists 
 run_cmd "gcloud storage buckets describe $BUCKET_PATH"
 
+
+# _____________________ Login to GC API for app ______________________
+
+print "▶️ Step 3. Enable Python app to call GC API methods"
+
+# # Update "project" in local config_default
+# run_cmd "gcloud config set project '$PROJECT_ID'"
+# run_cmd "gcloud config list"
+
+GCP_SCOPE=https://www.googleapis.com/auth/cloud-platform
+run_cmd "gcloud auth application-default login --scopes=$GCP_SCOPE"
+# output: ~/.config/gcloud/application_default_credentials.json for the app
+
+
 # _________ Enable Operator to access Bucket & assign Roles _________
 
 print "▶️ Step 4. Enable Operator to give R/W access to Bucket"
-OPERATOR_USER_EMAIL=$(gcloud config get-value account 2>/dev/null)
+OPERATOR_USER_EMAIL=`gcloud config get-value account 2>/dev/null`
 run_cmd "gcloud storage buckets add-iam-policy-binding $BUCKET_PATH \
     --member=user:$OPERATOR_USER_EMAIL \
     --role=roles/storage.objectAdmin"
@@ -111,12 +124,19 @@ print "▶️ Step 6. Enable Workers to execute Jobs via STS Agent"
 # 1. Get Info for Account Creation
 
 # Get Project Number (used by Python app to call transfer methods)
-PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+PROJECT_NUMBER=`gcloud projects describe $PROJECT_ID --format='value(projectNumber)'`
 
 # Get Email (the one based on the Project Number not on the Project Id)
 STS_EMAIL="project-${PROJECT_NUMBER}@storage-transfer-service.iam.gserviceaccount.com"
 
-# 2. Create STS Agent & Grant Access to Bucket
+# 2. Verify Operator is able to create STS Agent
+REQUIRED_ROLE="bindings.role:roles/iam.serviceAccountAdmin"
+run_cmd "gcloud projects get-iam-policy $PROJECT_ID \
+    --flatten='bindings[].members' \
+    --format='table(bindings.role)' \
+    --filter='bindings.members:$OPERATOR_USER_EMAIL AND $REQUIRED_ROLE'"
+
+# 3. Grant STS Agent an access to Bucket
 # The account is implicitely created with the policy update
 run_cmd "gcloud storage buckets add-iam-policy-binding gs://$BUCKET_NAME \
     --member=serviceAccount:$STS_EMAIL \
@@ -125,7 +145,7 @@ run_cmd "gcloud storage buckets add-iam-policy-binding gs://$BUCKET_NAME \
 # _____________________ End of Main Process ______________________
 
 print "✅ Success: STS Environment is ready to run app."
-exit 0
+return 0
 
 # _____________________ Annex: Transfer Workflow ______________________
 

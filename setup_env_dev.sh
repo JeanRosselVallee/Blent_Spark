@@ -58,13 +58,20 @@ export PATH=$PATH:$HOME/google-cloud-sdk/bin
 # _________________________ Virtual Environment _____________________
 
 print "▶️ Step 2. Virtual Environment Setup"
+
+PYTHON_SUBVERSION=$(python3 --version | cut -d "." -f 2)
+VENV_ACTIVATE="venv_spark/bin/activate"
 VENV_PATH="./venv_spark"
-if [ ! -d "$VENV_PATH" ]; then
+
+if [ ! -s "$VENV_ACTIVATE" ]; then
 
     # Install venv
-    if ! python3 -c "import venv" &> /dev/null; then
+    LIB_REQUIRED_BY_VENV="ensurepip"
+    if ! python3 -c "import ${LIB_REQUIRED_BY_VENV}" &> /dev/null; then
         print "venv is not installed. Installing..."
-        sudo apt update && sudo apt install --quiet python3-venv -y
+        
+        echo "sudo apt install --quiet python3.${PYTHON_SUBVERSION}-venv -y"
+        sudo apt update && sudo apt install --quiet python3.${PYTHON_SUBVERSION}-venv -y
     fi
 
     # Create virtual environment
@@ -83,8 +90,8 @@ if [ -f "requirements.txt" ]; then
 
     PIP_BIN="$VENV_PATH/bin/pip"  # Use pip from venv
 
-    "$PIP_BIN" install --upgrade pip
-    "$PIP_BIN" install -r "requirements.txt"
+    "$PIP_BIN" install --quiet --upgrade pip
+    "$PIP_BIN" install --quiet -r "requirements.txt"
 else
     print "Warning: requirements.txt not found. Skipping pip install."
 fi
@@ -92,4 +99,5 @@ fi
 # _____________________ End of Main Process ______________________
 
 print "✅ Success: Dev Environment is ready to use."
-exit 0
+set +e  # Reset to default (disables stop if any command fails)
+return 0

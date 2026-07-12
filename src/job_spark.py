@@ -36,8 +36,7 @@ import sys
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as f
 from pyspark.sql.types import StructType, StructField, StringType
-from gcsfs import GCSFileSystem
-from lib_common import GCS, init_gcs_from_dict, setup_logging, parse_args, \
+from lib_common import GCS, get_gcs_dict, setup_logging, parse_args, \
                         list_files_to_process, search_file_in_bucket
 
 
@@ -335,7 +334,7 @@ def main(config):
     logging.info("🚀 Starting Spark Job")
 
     # 1. Parse arguments using defaults from config.ini
-    gcs_dict = init_gcs_from_dict(config)
+    gcs_dict = get_gcs_dict(config)
     gcs = GCS(**gcs_dict)
     args = parse_args(config, gcs.BASE_DIR, "Spark Job")
     gcs.REL_RAW_DIR = args.REL_RAW_DIR

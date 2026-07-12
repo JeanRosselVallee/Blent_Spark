@@ -21,7 +21,7 @@ import requests  # check if source hyperlink is valid
 from typing import List, Tuple
 from datetime import datetime, timezone
 from google.cloud import storage_transfer_v1  # storage transfer to GCS
-from .lib_common import GCS, init_gcs_from_dict, setup_logging, parse_args, \
+from .lib_common import GCS, get_gcs_dict, setup_logging, parse_args, \
                         list_files_to_process, search_file_in_bucket
 
 
@@ -30,105 +30,18 @@ from .lib_common import GCS, init_gcs_from_dict, setup_logging, parse_args, \
 # Read configuration file
 config = configparser.ConfigParser()
 config.read("src/config.ini")  # Debug local execution
-# config.read("config.ini")  # Production remote execution
-
-# Configure Logging
-# logging.basicConfig(
-#     level=config.get("LOGGING", "LOG_LEVEL"),
-#     format=config.get("LOGGING", "LOG_FORMAT")
-# )
-
-# Set GCS values
 
 
-# @dataclass
-# class GCS:
-#     PROJECT_ID: str
-#     CREDENTIALS: google.auth.credentials.Credentials
-#     BUCKET_NAME: str
-#     bucket: storage.bucket
-#     BASE_DIR: str
-#     ABS_RAW_DIR: str
-#     REL_RAW_DIR: str
-#     storage: storage.Client
-#     API_URL: str
-#     filepaths: List[str]
-
-
-# gcs_dict = {
-#     "BUCKET_NAME": config.get("STORAGE", "BUCKET_NAME"),
-#     "REL_RAW_DIR": "",
-#     "ABS_RAW_DIR": "",
-#     "storage": storage.Client(),
-#     "API_URL": "https://storage.googleapis.com",
-#     "filepaths": []
-# }
-# # _, gcs_dict["PROJECT_ID"] = google.auth.default()
-# # Get the numerical project ID from ADC
-# gcs_dict["CREDENTIALS"], gcs_dict["PROJECT_ID"] = google.auth.default()
-# gcs_dict["BASE_DIR"] = "gs://" + gcs_dict["BUCKET_NAME"]
-# gcs_dict["bucket"] = gcs_dict["storage"].bucket(gcs_dict["BUCKET_NAME"])
-
-# gcs = GCS(**gcs_dict)
-
-
-# def parse_args(config: configparser.ConfigParser) -> argparse.Namespace:
-#     # Goals:
-#     # - get arguments from command line & config file
-#     # - set help description & list active parameters
-
-#     # Read default values from config file
-#     deft_raw_dir = config.get("SPARK_SCRIPT_DEFAULTS", "REL_RAW_DIR")
-#     deft_start_date = config.get("SPARK_SCRIPT_DEFAULTS", "DATE_START")
-#     deft_end_date = config.get("SPARK_SCRIPT_DEFAULTS", "DATE_END")
-#     DATE_FORMAT = config.get("GENERAL", "HELP_DATE_FORMAT")
-    
-#     parser = argparse.ArgumentParser(
-#         description="Cloud-Transfer Raw Files"
-#     )
-#     parser.add_argument(
-#         "--REL_RAW_DIR",
-#         type=str,
-#         default=deft_raw_dir,
-#         help=f"GCS path to output dir (default: {deft_raw_dir})"
-#     )
-#     parser.add_argument(
-#         "--DATE_START",
-#         type=str,
-#         default=deft_start_date,
-#         help=f"Start date ({DATE_FORMAT} default: {deft_start_date})"
-#     )
-#     parser.add_argument(
-#         "--DATE_END",
-#         type=str,
-#         default=deft_end_date,
-#         help=f"End date ({DATE_FORMAT} default: {deft_end_date})"
-#     )
-#     args = parser.parse_args()
-
-#     # Summary List of Active Parameters
-#     logging.info("🔧 Active Parameters:")
-#     args_dict = vars(args)
-#     [logging.info(f"  • {key}: {val}") for key, val in args_dict.items()]
-
-#     return args
-
-
-
-def list_files_to_transfer(gcs: GCS, files_to_process: List[str]) -> List[str]:
+def get_source_urls(gcs: GCS, files_to_process: List[str]) \
+    -> Tuple[List[str], List[str]]:
     # Goal: get files "pending" or missing in the bucket
 
-    files_to_transfer = []
+    source_urls = []
+    source_filenames = []
     for filename in files_to_process:
         # Check source is available in Bucket
         file_found_in_bucket = search_file_in_bucket(gcs, filename)
                 
-        # gcs_file_abs_path = f"{gcs.ABS_RAW_DIR}/{filename}"
-        # logging.info(f"⏭️ Looking in Bucket for: {gcs_file_abs_path}")
-        # gcs.filepaths.append(gcs_file_abs_path)
-        # gcs_file_rel_path = f"{gcs.REL_RAW_DIR}/{filename}"
-        # gcs_file_pointer = gcs.bucket.blob(gcs_file_rel_path)
-
         # if gcs_file_pointer.exists():
         if file_found_in_bucket:
             logging.info(f"⏭️ File {filename} is already in Bucket")
@@ -152,9 +65,10 @@ def list_files_to_transfer(gcs: GCS, files_to_process: List[str]) -> List[str]:
                 raise FileNotFoundError(f"❌ URL {url_file} not valid")
 
             file_size = response.headers.get("Content-Length", "0")
-            files_to_transfer.append(f"{url_file}\t{file_size}")
+            source_urls.append(f"{url_file}\t{file_size}")
+            source_filenames.append(filename)
 
-    return files_to_transfer
+    return source_urls, source_filenames
 
 
 def create_tsv_file(gcs: GCS, tsv_contents: List[str]) -> str:
@@ -193,7 +107,6 @@ def define_transfer_job(gcs: GCS, tsv_url: str) -> Tuple[str, dict]:
     job_definition = {
         "name": job_name,
         "project_id": gcs.PROJECT_ID,
-        #"status": storage_transfer_v1.TransferJob.Status.ENABLED,
         "status": "ENABLED",  # so job waits for permissions
         "description": "Cloud-Transfer of Raw Files",
         "transfer_spec": {
@@ -210,7 +123,7 @@ def define_transfer_job(gcs: GCS, tsv_url: str) -> Tuple[str, dict]:
     return job_name, job_definition
 
 
-def run_transfer_job(gcs: GCS, job_name: str, job_definition: dict) -> dict:
+def run_transfer_job(gcs: GCS, job_name: str, job_definition: dict) -> Tuple[dict, str]:
     """
     Required Roles for accounts involved in Transfer job:
     |---------------------------|-------|-------|---------------|-------------|
@@ -250,7 +163,7 @@ def monitor_transfer(gcs, master_client, job_name):
 
     from google.protobuf.json_format import MessageToDict
 
-    logging.info("⏭️ Monitoring cloud transfer... (0% Spark hardware usage)")
+    logging.info("⏭️ Monitoring cloud transfer...")
     operations_client = master_client.transport.operations_client
 
     while True:
@@ -315,7 +228,7 @@ def main(config: configparser.ConfigParser) -> str:
         logging.info("🚀 Starting Transfer Job")
         
         step = "1. Parse Arguments"
-        gcs_dict = init_gcs_from_dict(config)
+        gcs_dict = get_gcs_dict(config)
         gcs = GCS(**gcs_dict)
         args = parse_args(config, gcs.BASE_DIR, "Transfer Job")
         gcs.REL_RAW_DIR = args.REL_RAW_DIR
@@ -325,17 +238,17 @@ def main(config: configparser.ConfigParser) -> str:
         files_to_process = list_files_to_process(args, config)
 
         step = "3. Get Pending Files"
-        files_to_transfer = list_files_to_transfer(
+        source_urls, source_filenames = get_source_urls(
             gcs,
             files_to_process
         )
 
-        if len(files_to_transfer) > 0:
+        if len(source_urls) > 0:
 
             step = "4. Create TSV File"
             tsv_url = create_tsv_file(
                 gcs,
-                files_to_transfer
+                source_urls
             )
 
             step = "5. Define Transfer Job"
@@ -352,6 +265,7 @@ def main(config: configparser.ConfigParser) -> str:
             )
 
             step = "7. Monitor progress of Transfer Job"
+            logging.info(f"List of files to transfer: {source_filenames}")
             monitor_transfer(
                 gcs,
                 master_client,

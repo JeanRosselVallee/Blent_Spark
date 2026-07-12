@@ -1,3 +1,4 @@
+import os
 import argparse
 import configparser
 import logging
@@ -24,7 +25,7 @@ class GCS:
     filepaths: List[str]
 
 
-def init_gcs_from_dict(config):
+def get_gcs_dict(config: configparser.ConfigParser) -> dict:
     # Goal: Initialize GCS object from dictionary
 
     gcs_dict = {
@@ -54,7 +55,10 @@ def parse_args(
     # - set help description & list active parameters
 
     # Read default values from config file
-    deft_raw_dir = config.get("SPARK_SCRIPT_DEFAULTS", "REL_RAW_DIR")
+    if "transfer" in script_description.lower():
+        deft_raw_dir = config.get("TRANSFER", "REL_RAW_DIR")
+    else:
+        deft_raw_dir = config.get("SPARK_SCRIPT_DEFAULTS", "REL_RAW_DIR")
     deft_start_date = config.get("SPARK_SCRIPT_DEFAULTS", "DATE_START")
     deft_end_date = config.get("SPARK_SCRIPT_DEFAULTS", "DATE_END")
     DATE_FORMAT = config.get("GENERAL", "HELP_DATE_FORMAT")
@@ -68,7 +72,7 @@ def parse_args(
 
     # Create Parser
     parser = argparse.ArgumentParser(
-        description="Cloud-Transfer Raw Files"
+        description=script_description
     )
     parser.add_argument(
         "--REL_RAW_DIR",
