@@ -32,7 +32,8 @@ For future use, it's possible to pass env variables
 import logging
 import configparser
 import os
-import sys
+import sys  
+from gcsfs import GCSFileSystem
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as f
 from pyspark.sql.types import StructType, StructField, StringType
@@ -69,7 +70,7 @@ def create_spark_session(project_id):
         os.path.expanduser(credentials_path)
 
     spark = SparkSession.builder \
-        .appName("AWS_to_GCS_ETL_Job") \
+        .appName("GCS_ETL_Job") \
         .config(  # __________ AWS & GCS Storage _________________________
             "spark.jars.packages",  # Spark syntax for list = "...,"
             "com.google.cloud.bigdataoss:gcs-connector:hadoop3-2.2.8,"
@@ -90,6 +91,10 @@ def create_spark_session(project_id):
         .config(  # __________ General ___________________________________
             "spark.ui.showConsoleProgress",
             "false"
+        ) \
+        .config(  # use old parser that accepts time suffix "UTC" in raw files
+            "spark.sql.legacy.timeParserPolicy",
+            "LEGACY"
         ) \
         .getOrCreate()
 
@@ -311,7 +316,6 @@ def load(sdf, output_path):
     # Check Load Execution
 
     success_file = f"{output_path}/_SUCCESS"
-    file_sys_name, _ = success_file.split("://")
 
     file_sys = GCSFileSystem()
     load_success = file_sys.exists(success_file)

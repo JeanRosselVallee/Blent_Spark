@@ -109,9 +109,6 @@ print "▶️ Step 5. Enable Master to manage Jobs via credentials"
 MASTER_ACCOUNT=`run_cmd "gcloud iam service-accounts list \
  --filter='displayName:Compute Engine default service account' \
  --format='value(email)'"`
-# MASTER_ACCOUNT=`run_cmd 'gcloud iam service-accounts list \
-#  --filter="displayName:Compute Engine default service account" \
-#  --format="value(email)"'`
 
 run_cmd "gcloud iam service-accounts keys create credentials.json \
  --iam-account=$MASTER_ACCOUNT"
@@ -129,12 +126,16 @@ PROJECT_NUMBER=`gcloud projects describe $PROJECT_ID --format='value(projectNumb
 # Get Email (the one based on the Project Number not on the Project Id)
 STS_EMAIL="project-${PROJECT_NUMBER}@storage-transfer-service.iam.gserviceaccount.com"
 
-# 2. Verify Operator is able to create STS Agent
+# 2. Check Operator has required role & permission to create an STS Agent
 REQUIRED_ROLE="bindings.role:roles/iam.serviceAccountAdmin"
 run_cmd "gcloud projects get-iam-policy $PROJECT_ID \
     --flatten='bindings[].members' \
     --format='table(bindings.role)' \
     --filter='bindings.members:$OPERATOR_USER_EMAIL AND $REQUIRED_ROLE'"
+
+# A service that needs permission "serviceUsage.use", reactivates it
+REQUIRED_PERMISSION="serviceusage.services.use"
+run_cmd "gcloud services list --project=$PROJECT_ID --enabled --limit=1"
 
 # 3. Grant STS Agent an access to Bucket
 # The account is implicitely created with the policy update

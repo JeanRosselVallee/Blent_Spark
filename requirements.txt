@@ -3,7 +3,7 @@ findspark
 pandas
 google-cloud-storage
 google-cloud-storage-transfer
-#fsspec  # File System compatible with AWS & GCS
+gcsfs  # GCloud Storage File System
 python-dotenv
 logging
 pytest
