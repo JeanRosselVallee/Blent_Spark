@@ -9,31 +9,34 @@ Key Features:
 
 Usage:
 python3 -m src.job_transfer
+
+Supervision on GC Console:
+Search icon : "Storage Transfer" or "Transfer Jobs"
+
+Suggested evolution:
+Compress transferred files to save disk space
 """
 
 # _____________________________ Modules _____________________________
 
 import logging
-import configparser
 import sys
 import time  # implements sleep()
 import requests  # check if source hyperlink is valid
 from typing import List, Tuple
 from datetime import datetime, timezone
 from google.cloud import storage_transfer_v1  # storage transfer to GCS
-from .lib_common import GCS, get_gcs_dict, setup_logging, parse_args, \
+from .lib_common import GCS, apply_config_values, \
                         list_files_to_process, search_file_in_bucket
 
 
-# ____________________ Variables Initialization _____________________
-
-# Read configuration file
-config = configparser.ConfigParser()
-config.read("src/config.ini")  # Debug local execution
+# ____________________ Functions Definition _____________________
 
 
-def get_source_urls(gcs: GCS, files_to_process: List[str]) \
-    -> Tuple[List[str], List[str]]:
+def get_source_urls(
+        gcs: GCS,
+        files_to_process: List[str]
+) -> Tuple[List[str], List[str]]:
     # Goal: get files "pending" or missing in the bucket
 
     source_urls = []
@@ -49,11 +52,11 @@ def get_source_urls(gcs: GCS, files_to_process: List[str]) \
         else:
             logging.info(f"📝 File {filename} is pending")
 
-            # ToDo: delete this mock file
-            # filename = "sample.csv"
+            if gcs.DEBUG_ENABLED:  # In Debug Mode, process a sample file
+                filename = "sample.csv"
 
             # Check source is available in S3
-            url_base_path = config.get("STORAGE", "AWS_URL_DIR")
+            url_base_path = gcs.SOURCE_URL_DIR
             url_file = f"{url_base_path}/{filename}"
             logging.info(f"⏭️ Checking validity of link: {url_file}")
             response = requests.head(
@@ -123,7 +126,12 @@ def define_transfer_job(gcs: GCS, tsv_url: str) -> Tuple[str, dict]:
     return job_name, job_definition
 
 
-def run_transfer_job(gcs: GCS, job_name: str, job_definition: dict) -> Tuple[dict, str]:
+def run_transfer_job(
+        gcs: GCS,
+        job_name: str,
+        job_definition:
+        dict
+) -> Tuple[dict, str]:
     """
     Required Roles for accounts involved in Transfer job:
     |---------------------------|-------|-------|---------------|-------------|
@@ -136,7 +144,7 @@ def run_transfer_job(gcs: GCS, job_name: str, job_definition: dict) -> Tuple[dic
     Cf. setup_data_services.sh where these roles were granted. 
     """
 
-    logging.info("✅ Grant Transfer permissions to Master client via credentials")
+    logging.info("✅ Grant Transfer permissions to Master via credentials")
     master_client = storage_transfer_v1.StorageTransferServiceClient(
         credentials=gcs.CREDENTIALS
     )
@@ -158,7 +166,7 @@ def run_transfer_job(gcs: GCS, job_name: str, job_definition: dict) -> Tuple[dic
     return master_client, job_name
 
 
-def monitor_transfer(gcs, master_client, job_name):
+def monitor_transfer(gcs: GCS, master_client: dict, job_name: str) -> None:
     # Monitor progress of transfer operations
 
     from google.protobuf.json_format import MessageToDict
@@ -212,8 +220,6 @@ def monitor_transfer(gcs, master_client, job_name):
                     logging.info("✅ Transfer completed!")
                     # Parse the operation metadata
                     if current_operation.metadata:
-                        # metadata_dict = MessageToDict(current_operation.metadata)
-                        # counters = metadata_dict.get("counters", {})
                         logging.info(f"📊 Transfer Summary:\n{counters}")
                     break
 
@@ -222,20 +228,25 @@ def monitor_transfer(gcs, master_client, job_name):
             raise ValueError(f"❌ Transfer Failed: {e}")
 
 
-def main(config: configparser.ConfigParser) -> str:
+def main() -> None:
     try:
-        setup_logging(config, "job_transfer.log")
+        step = "1. Initialize variables from config & arguments"
+        # Gather all variables into Dataclass "gcs"
+
+        # Transfer job uses config file from local dir
+        gcs, args = apply_config_values(
+            "src/config.ini",
+            "Transfer Job",
+            "job_transfer.log"
+        )
+
         logging.info("🚀 Starting Transfer Job")
-        
-        step = "1. Parse Arguments"
-        gcs_dict = get_gcs_dict(config)
-        gcs = GCS(**gcs_dict)
-        args = parse_args(config, gcs.BASE_DIR, "Transfer Job")
-        gcs.REL_RAW_DIR = args.REL_RAW_DIR
-        gcs.ABS_RAW_DIR = f"{gcs.BASE_DIR}/{gcs.REL_RAW_DIR}"
 
         step = "2. Get Input Filenames"
-        files_to_process = list_files_to_process(args, config)
+        files_to_process = list_files_to_process(
+            args,
+            gcs
+        )
 
         step = "3. Get Pending Files"
         source_urls, source_filenames = get_source_urls(
@@ -277,9 +288,9 @@ def main(config: configparser.ConfigParser) -> str:
         return
 
     except Exception as e:
-        logging.error(f"❌ Error in step {step}:\n{e}")
+        logging.error(f"❌ Error in step {step}: {e}")
         sys.exit(1)
 
 
 if __name__ == "__main__":
-    main(config)
+    main()

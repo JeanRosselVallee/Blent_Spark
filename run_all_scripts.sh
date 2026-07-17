@@ -8,8 +8,7 @@
 # - transfer: Run Transfer & Spark jobs
 # - spark: Run only Spark job
 
-
-# ToDo: add arg Bucket name but checkbefore if available in config_ini
+# _____________________________ Usage ______________________________ 
 
 # Help text
 HELP_TEXT=$(cat << HELP_TEXT_END
@@ -27,6 +26,24 @@ N.B.: For argument "from_step", choose from which step to start the execution:
 - "4", "spark" or any other value: Run only Spark job
 HELP_TEXT_END
 )
+
+# _________________________ Log File Setup __________________________ 
+
+LOG_DIR=`grep "^LOG_DIR =" ./src/config.ini | cut -d" " -f 3`
+mkdir -p ${LOG_DIR}
+SUFFIX=$(date +"%Y%m%d_%H%M")
+LOG_FILE="${LOG_DIR}/run_all_scripts_${SUFFIX}.log"
+
+# Change Shell output to both: console & log file
+ESCAPE_CHAR=$'\x1b'
+COLOR_CODE_REGEX="${ESCAPE_CHAR}\[[0-9;]*m"  # Font color code to omit in log file
+# exec > >(tee -a "$LOG_FILE" | sed -r "s/$COLOR_CODE_REGEX//g") 2>&1
+exec > >(tee >(sed -r "s/$COLOR_CODE_REGEX//g" >> "$LOG_FILE")) 2>&1
+# "exec > X" = Redirect 1 (stdout) to X
+# ">(...)" = stdout is redirected to a command not to a file
+# "sed -r '...'" = Removes the font color codes as regexp from stdout messages  
+# "2>&1" = Redirect file descriptor 2 (std error) to 1 (stdout)
+
 
 # _________________________ Parse Arguments __________________________ 
 
@@ -60,7 +77,7 @@ while [ $# -gt 0 ]; do
             ;;
         -d|--destination)
             DESTINATION="$2"
-            JOB_ARGS="$JOB_ARGS --DESTINATION='$DESTINATION'"
+            JOB_ARGS="$JOB_ARGS --DESTINATION='${DESTINATION}/run_$SUFFIX'"
             shift 2
             ;;
         *)
@@ -81,28 +98,33 @@ done
 
 # __________________________ Debug Functions ______________________
 
-print2() {  
+echo_color() {  
     # Print Log messages in green
     
-    MESSAGE=$1  
-    YELLOW='\033[1;33m'
-    NC='\033[0m' # No Color (Reset)
-    echo -e "${YELLOW}${MESSAGE}${NC}"
+    LOG_MESSAGE=$1  
+    YELLOW_COLOR='\033[1;33m'
+    NO_COLOR='\033[0m' # No Color (Reset)
+    echo -e "${YELLOW_COLOR}${LOG_MESSAGE}${NO_COLOR}"
+}
+print_phase() {
+    # Add a horizontal bar to phase subtitle
+
+    BAR="========================="
+    echo_color "${BAR} $1 ${BAR}"
 }
 
-run_cmd2(){  
+run_command(){  
     # Run command, display it & exit on errors
     COMMAND_STRING="$*"
-    print2 "$COMMAND_STRING"
+    echo_color "$COMMAND_STRING"
     eval "$COMMAND_STRING"
 
-    RETURN_CODE=$?
-    if [ $RETURN_CODE -ne 0 ]; then
-        print2 "❌ Exit on error." >&2
+    COMMAND_RETURN_CODE=$?
+    if [ $COMMAND_RETURN_CODE -ne 0 ]; then
+        echo_color "❌ Exit on error." >&2
         exit 1
     fi
 }
-
 
 # _________________________ Main Execution __________________________ 
 
@@ -118,44 +140,46 @@ esac
 source venv_spark/bin/activate
 
 if [ $START_PHASE -eq 1 ]; then
-    print2 "Phase 1) Setup development environment"
+    print_phase "Phase 1) Setup development environment"
     # Dev packages (curl, venv, GC CLI) & app requirements, env variables, venv.
     chmod +x ./setup_env_dev.sh
-    run_cmd2 "source ./setup_env_dev.sh"
+    run_command "source ./setup_env_dev.sh"
 fi
 
 if [ $START_PHASE -le 2 ]; then
-    print2 "Phase 2) Setup data services"
+    print_phase "Phase 2) Setup data services"
     # GCS Bucket, GCP Dataproc Cluster, GCP Dataproc Job
     chmod +x ./setup_data_services.sh
-    run_cmd2 "source ./setup_data_services.sh"
+    run_command "source ./setup_data_services.sh"
 fi
 
 if [ $START_PHASE -le 3 ]; then
-    print2 "Phase 3) Run Cloud-Transfer Job"
+    print_phase "Phase 3) Run Cloud-Transfer Job"
     # Transfer source raw files from AWS S3 to GCS Bucket
-    run_cmd2 "python3 -m src.job_transfer $JOB_ARGS"
+    run_command "python3 -m src.job_transfer $JOB_ARGS"
 fi
 
-print2 "Phase 4) Run Spark Job"
+print_phase "Phase 4) Run Spark Job"
 # ETL-Process of raw files in GCS Bucket using Spark
 GCS_PATH="gs://blent_spark_bucket5"
 
 # Upload required files to GCS Bucket:
-FILEPATHS="src/config.ini src/job_spark.py src/lib_common.py credentials.json"
+FILEPATHS="src/config.ini src/job_spark.py src/lib_common.py"  # ToDo: credentials.json"
 for PATH_i in $FILEPATHS; do
-    run_cmd2 "gcloud storage cp ./$PATH_i $GCS_PATH/$PATH_i"
+    run_command "gcloud storage cp ./$PATH_i $GCS_PATH/$PATH_i"
 done
 
 if [ "X$JOB_ARGS" != "X" ]; then
     JOB_ARGS="-- $JOB_ARGS"
 fi
-run_cmd2 "gcloud dataproc jobs submit pyspark $GCS_PATH/src/job_spark.py \
+run_command "gcloud dataproc jobs submit pyspark $GCS_PATH/src/job_spark.py \
+--id=spark-etl-$SUFFIX \
 --cluster=main-cluster --region=us-central1 \
---files='$GCS_PATH/credentials.json,$GCS_PATH/src/config.ini' \
+--files='$GCS_PATH/src/config.ini' \
 --py-files='$GCS_PATH/src/lib_common.py' $JOB_ARGS"
+# --files='$GCS_PATH/credentials.json,$GCS_PATH/src/config.ini' \
 
 # _____________________ End of Main Process ______________________
 
-print2 "🏁 Success: Finished run_all_scripts.sh"
+print_phase "🏁 Success: Finished run_all_scripts.sh"
 exit 0

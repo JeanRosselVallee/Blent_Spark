@@ -19,10 +19,10 @@ set -e  # Stop if any command fails
 # __________________________ Debug Functions ______________________
 
 print() {  # Print Log messages in green
-    MESSAGE=$1  
-    GREEN='\033[0;32m'
-    NC='\033[0m' # No Color (Reset)
-    echo -e "${GREEN}${MESSAGE}${NC}"    
+    LOG_MESSAGE=$1  
+    GREEN_COLOR='\033[0;32m'
+    NO_COLOR='\033[0m' # No Color (Reset)
+    echo -e "${GREEN_COLOR}${LOG_MESSAGE}${NO_COLOR}"
 }
 
 # ___________________________ Main Execution ______________________ 
