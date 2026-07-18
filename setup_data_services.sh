@@ -19,7 +19,7 @@
 # Outputs: credentials.json, configured bucket, STS agent, ADC Application Credentials.
 #
 # Usage: 
-# ./setup_data_services.sh
+# source ./setup_data_services.sh
 
 # __________________________ Debug Functions ______________________
 
@@ -55,7 +55,7 @@ print "--- Setup GC Storage environment for Transfer & Spark jobs ---"
 
 # __________________Step 1: Login to GC CLI ______________________
 
-print "▶️ Step 1/6: Enable Shell script to run GC CLI commands"
+print "▶️ Step 1/5: Enable Shell script to run GC CLI commands"
 run_cmd "gcloud auth login"  # output: access token for CLI
 
 # 1.1 Get GCS Account Info
@@ -92,7 +92,7 @@ print "Operator has required permission $REQUIRED_PERMISSION to create STS Agent
 
 # _____________ Step 2: Login for app access to GC API  _______________
 
-print "▶️ Step 2/6. Enable Python app to call GC API methods"
+print "▶️ Step 2/5. Enable Python app to call GC API methods"
 
 GCP_SCOPE=https://www.googleapis.com/auth/cloud-platform
 run_cmd "gcloud auth application-default login --scopes=$GCP_SCOPE"
@@ -101,12 +101,18 @@ run_cmd "gcloud auth application-default login --scopes=$GCP_SCOPE"
 
 # ____________________Step 3: Create Bucket ____________________________
 
-print "▶️ Step 3/6. Create Bucket"
+print "▶️ Step 3/5. Create Bucket"
 BUCKET_NAME=`grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3`
 BUCKET_PATH="gs://$BUCKET_NAME"
-# REGION=`gcloud config get-value dataproc/region`
 COMMAND="gcloud storage buckets create $BUCKET_PATH --location=$REGION"
 eval "$COMMAND"  # Non-essential command, won't exit on error if bucket exists
+
+# Exit if Bucket name is unavailable (taken already by someone else)
+BUCKET_NAME_TAKEN=`eval "$COMMAND" 2>&1 | grep "not available"`
+if [ "X$BUCKET_NAME_TAKEN" != "X" ]; then 
+    print "❌ Exit on error: Change the Bucket's name in config.ini." >&2
+    exit 1
+fi
 
 # Bucket description = check Bucket exists
 run_cmd "gcloud storage buckets describe $BUCKET_PATH"
@@ -114,29 +120,16 @@ run_cmd "gcloud storage buckets describe $BUCKET_PATH"
 
 # _____Step 4: Enable Operator to access Bucket & assign Roles ______
 
-print "▶️ Step 4/6. Enable Operator to give R/W access to Bucket"
+print "▶️ Step 4/5. Enable Operator to give R/W access to Bucket"
 run_cmd "gcloud storage buckets add-iam-policy-binding $BUCKET_PATH \
     --member=user:$OPERATOR_USER_EMAIL \
     --role=roles/storage.objectAdmin"
 
-# ______________ Step 5: Enable Master to manage Jobs ______________
+# ______________ Step 5: Enable Workers to execute Jobs_______________
 
-# print "▶️ Step 5/6. Enable Master to manage Jobs via credentials"
-# MASTER_SA_EMAIL=`run_cmd "gcloud iam service-accounts list \
-#  --filter='displayName:Compute Engine default service account' \
-#  --format='value(email)'"`
-# For local run of Saprk job? ToDo:  remove this line
+print "▶️ Step 5/5. Enable Workers to execute Jobs via STS Agent"
 
-
-# run_cmd "gcloud iam service-accounts keys create credentials.json \
-#  --iam-account=$MASTER_SA_EMAIL"
-# # output: ./credentials.json for the Master
-
-# ______________Step 6: Enable Workers to execute Jobs_______________
-
-print "▶️ Step 6/6. Enable Workers to execute Jobs via STS Agent"
-
-# 6.1 Get Info for Account Creation
+# 5.1 Get Info for Account Creation
 
 # Get Project Number (used by Python app to call transfer methods)
 PROJECT_NUMBER=`gcloud projects describe $PROJECT_ID --format='value(projectNumber)'`
@@ -144,11 +137,7 @@ PROJECT_NUMBER=`gcloud projects describe $PROJECT_ID --format='value(projectNumb
 # Get Email (the one based on the Project Number not on the Project Id)
 STS_AGENT_EMAIL="project-${PROJECT_NUMBER}@storage-transfer-service.iam.gserviceaccount.com"
 
-# 6.2 Get an updated app profile with Compute Engine SA key from credentials file
-# run_cmd "export GOOGLE_APPLICATION_CREDENTIALS=./credentials.json"
-# For local run of Saprk job? ToDo:  remove this line
-
-# 6.3 Grant STS Agent an access to Bucket
+# 5.2  Grant STS Agent an access to Bucket
 # The account is implicitely created with the policy update
 run_cmd "gcloud storage buckets add-iam-policy-binding gs://$BUCKET_NAME \
     --member=serviceAccount:$STS_AGENT_EMAIL \

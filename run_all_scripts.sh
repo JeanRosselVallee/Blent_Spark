@@ -1,29 +1,53 @@
 #!/bin/bash
 
-# Goal
-# Usage:  ./run_all_scripts.sh
-# Choose from which step to start the execution:
-# - zero: Run all scripts from scratch
-# - login: Skip setup of development environments
-# - transfer: Run Transfer & Spark jobs
-# - spark: Run only Spark job
 
-# _____________________________ Usage ______________________________ 
+# Goal: Prepare & orchestrate the data-pipeline workflow on Google Cloud
+#
+# Description:
+#   Runs 4 scripts
+#   - sets up the development environment
+#   - configures GCS/Dataproc data services,
+#   - transfers raw files from AWS S3 to a GCS bucket via Storage Transfer Service
+#   - submits a Spark ETL job to Dataproc. 
+#
+# Key Features:
+#   - Supports partial execution starting from a chosen phase.
+#   - Provides the arguments to Transfer & Spark jobs
+#   - For Spark job, automatic upload of dependencies/files to GCS
+#   - Unified logging to console and timestamped log file
+#
+# Prerequisites:
+#   - ./src/config.ini with LOG_DIR, BUCKET_NAME, REGION, etc.
+#   - ./setup_env_dev.sh, ./setup_data_services.sh, 
+#   - ./src/job_transfer.py, ./src/job_spark.py, ./src/lib_common.py
+#
+# Usage:
+#   ./run_all_scripts.sh -f <START_PHASE> [-s <DATE_START>] [-e <DATE_END>] [-d <DESTINATION>]
+#
+# Outputs:
+#   - Log file: ${LOG_DIR}/run_all_scripts_<YYYYMMDD_HHMM>.log
+#   - GCS bucket populated with raw data and processed output (via Spark)
+#   - Dataproc job named spark-etl-<YYYYMMDD_HHMM>
+#
+# Examples:
+#   ./run_all_scripts.sh
+#   ./run_all_scripts.sh -f transfer -s '2019-10-01 00:00:00' -e '2019-10-16 00:00:00'
+#   ./run_all_scripts.sh -f spark -d 'gs://my-bucket/processed'
+
+# _____________________________ Arguments ______________________________ 
 
 # Help text
 HELP_TEXT=$(cat << HELP_TEXT_END
 Usage: $0 -f <START_PHASE> [-s <DATE_START>] [-e <DATE_END>] [-d '<DESTINATION>'
 
--f, --from_step    1|all (default), 2|login, 3|transfer, 4|spark|any
--s, --date_start   'YYYY-MM-DD HH:MM:SS'         (Optional)
--e, --date_end     'YYYY-MM-DD HH:MM:SS'         (Optional)
--d, --destination  'gs://<BUCKET_NAME>/<SUBDIR>' (Optional)
-
-N.B.: For argument "from_step", choose from which step to start the execution:
-- "1" or "all":      Run all scripts from scratch
-- "2" or "login":    Skip setup of development environments
-- "3" or "transfer": Run Transfer & Spark jobs
-- "4", "spark" or any other value: Run only Spark job
+-f, --from_step   1|all (default), 2|login, 3|transfer, 4|spark|any
+                    1/all      : skip nothing
+                    2/login    : skip env setup
+                    3/transfer : run transfer + Spark jobs
+                    4/spark/*  : run only Spark job
+-s, --date_start  'YYYY-MM-DD HH:MM:SS'  (optional, passed to both jobs)
+-e, --date_end    'YYYY-MM-DD HH:MM:SS'  (optional, passed to both jobs)
+-d, --destination 'gs://<BUCKET_NAME>/<SUBDIR>' (optional, passed to both jobs)
 HELP_TEXT_END
 )
 
@@ -37,8 +61,7 @@ LOG_FILE="${LOG_DIR}/run_all_scripts_${SUFFIX}.log"
 # Change Shell output to both: console & log file
 ESCAPE_CHAR=$'\x1b'
 COLOR_CODE_REGEX="${ESCAPE_CHAR}\[[0-9;]*m"  # Font color code to omit in log file
-# exec > >(tee -a "$LOG_FILE" | sed -r "s/$COLOR_CODE_REGEX//g") 2>&1
-exec > >(tee >(sed -r "s/$COLOR_CODE_REGEX//g" >> "$LOG_FILE")) 2>&1
+exec > >(tee >(sed -r "s/$COLOR_CODE_REGEX//g" >> "$LOG_FILE")) # 2>&1
 # "exec > X" = Redirect 1 (stdout) to X
 # ">(...)" = stdout is redirected to a command not to a file
 # "sed -r '...'" = Removes the font color codes as regexp from stdout messages  
@@ -161,10 +184,12 @@ fi
 
 print_phase "Phase 4) Run Spark Job"
 # ETL-Process of raw files in GCS Bucket using Spark
-GCS_PATH="gs://blent_spark_bucket5"
+
+BUCKET_NAME=`grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3`
+GCS_PATH="gs://${BUCKET_NAME}"
 
 # Upload required files to GCS Bucket:
-FILEPATHS="src/config.ini src/job_spark.py src/lib_common.py"  # ToDo: credentials.json"
+FILEPATHS="src/config.ini src/job_spark.py src/lib_common.py"
 for PATH_i in $FILEPATHS; do
     run_command "gcloud storage cp ./$PATH_i $GCS_PATH/$PATH_i"
 done
@@ -177,7 +202,6 @@ run_command "gcloud dataproc jobs submit pyspark $GCS_PATH/src/job_spark.py \
 --cluster=main-cluster --region=us-central1 \
 --files='$GCS_PATH/src/config.ini' \
 --py-files='$GCS_PATH/src/lib_common.py' $JOB_ARGS"
-# --files='$GCS_PATH/credentials.json,$GCS_PATH/src/config.ini' \
 
 # _____________________ End of Main Process ______________________
 

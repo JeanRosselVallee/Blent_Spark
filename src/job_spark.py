@@ -12,10 +12,12 @@ Key Features:
 
 Pre-requisites:
 Upload required files to GCS Bucket:
+BUCKET_NAME=`grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3`
+GCS_PATH="gs://$BUCKET_NAME"
 GCS_PATH="gs://blent_spark_bucket5"
 FILEPATHS="src/config.ini src/job_spark.py src/lib_common.py"
 for PATH_i in $FILEPATHS; do
-    gcloud storage cp ./$PATH_i $GCS_PATH/$PATH_i
+    gcloud storage cp ./$PATH_i ${GCS_PATH}/$PATH_i
 done
 
 Usage:
@@ -24,7 +26,7 @@ gcloud dataproc jobs submit pyspark $GCS_PATH/src/job_spark.py \
 --files="$GCS_PATH/src/config.ini" \
 --py-files="$GCS_PATH/src/lib_common.py" -- \
 --DATE_START="2019-10-01 00:00:00" --DATE_END="2019-10-16 00:00:00" \
---DESTINATION="gs://blent_spark_bucket5/data/processed/run_20260714"
+--DESTINATION="${GCS_PATH}/data/processed/run_20260714"
 
 Suggested evolution:
 
@@ -36,7 +38,6 @@ Search icon : "Spark Jobs" (or "Managed Apache Spark" -> "Jobs")
 """
 
 import logging
-import os
 import sys
 import argparse
 from gcsfs import GCSFileSystem
@@ -44,34 +45,28 @@ from pyspark.sql import SparkSession, Window, DataFrame
 from pyspark.sql import functions as f
 from pyspark.sql.types import StructType, StructField, StringType
 from typing import List, Tuple
-from lib_common import GCS, apply_config_values, \
+from lib_common import CONF_VARS, apply_config_values, \
                         list_files_to_process, search_file_in_bucket
 
 
 def create_spark_session(project_id: str) -> SparkSession:
     """
-    Initializes a Spark Session with GCS support using ADC.
+    Initializes a Spark Session with GCS support.
     Spark requires a connector to access the large files stored in GCS.
     """
 
-    # ToDo: check this path is not even for local run (not remote run either)
-    # Get credentials
-    credentials_path = "~/.config/gcloud/application_default_credentials.json"
-    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = \
-        os.path.expanduser(credentials_path)
-
     spark = SparkSession.builder \
         .appName("GCS_ETL_Job") \
-        .config(  # __________ AWS & GCS Storage _________________________
+        .config(  # __________ Hadoop & GCS Storage _________________________
             "spark.jars.packages",  # Spark syntax for list = "...,"
             "com.google.cloud.bigdataoss:gcs-connector:hadoop3-2.2.8,"
-            "org.apache.hadoop:hadoop-aws:3.4.2"
+            # "org.apache.hadoop:hadoop-aws:3.4.2"  # for future use
         ) \
         .config(  # __________ GCS Bucket ________________________________
             "spark.hadoop.fs.gs.impl",
             "com.google.cloud.hadoop.fs.gcs.GoogleHadoopFileSystem"
         ) \
-        .config(
+        .config(  # For local runs (not for DataProc)
             "spark.hadoop.fs.gs.auth.type",
             "APPLICATION_DEFAULT"
         ) \
@@ -80,8 +75,8 @@ def create_spark_session(project_id: str) -> SparkSession:
             project_id
         ) \
         .config(  # __________ General ___________________________________
-            "spark.ui.showConsoleProgress",
-            "false"
+            "spark.ui.showConsoleProgress",  # show progress tracking bar
+            "true"  # Ex.: [Stage 8:=====>    (8 done + 4 active) / 20 total]
         ) \
         .config(  # use old parser that accepts time suffix "UTC" in raw files
             "spark.sql.legacy.timeParserPolicy",
@@ -93,7 +88,8 @@ def create_spark_session(project_id: str) -> SparkSession:
     spark.sparkContext.setLogLevel("ERROR")
 
     # Spark job's configuration: resource allocation
-    logging.info("📊 Executor Configuration\n"
+    logging.info(
+        "📊 Executor Configuration\n"
         f"\tMemory: {spark.conf.get('spark.executor.memory')}\n"
         f"\tNb. cores: {spark.conf.get('spark.executor.cores')}\n"
         f"\tNb. instances: {spark.conf.get('spark.executor.instances')}"
@@ -108,9 +104,9 @@ def get_row_count(sdf_in: DataFrame, step_name: str) -> int:
     return sdf_row_count
 
 
-def print_task_completed(sdf_in: DataFrame, step_name: str, gcs: GCS):
-    logging.info(f"✅ Task '{step_name}' completed.")
-    if gcs.DEBUG_ENABLED:  # In Debug Mode, log row-count of DF after task ends
+def print_task_status(sdf_in: DataFrame, step_name: str, conf_vars: CONF_VARS):
+    logging.info(f"✅ Transformation '{step_name}' appended to job.")
+    if conf_vars.DEBUG_ENABLED:  # In Debug Mode, log row-count after task ends
         get_row_count(sdf_in, step_name)
 
 
@@ -130,14 +126,15 @@ def get_schema() -> StructType:
     return schema
 
 
-def extract(gcs: GCS, spark: SparkSession, filenames: List[str]) \
--> Tuple[DataFrame, int]:
+def extract(conf_vars: CONF_VARS, spark: SparkSession, filenames: List[str]) \
+        -> Tuple[DataFrame, int]:
     """
     2. Ingestion: Read raw data
     input_path: 1 file or list in local storage, AWS S3, GCS Buckets
     """
 
-    abs_raw_dir = f"{gcs.BASE_DIR}/{gcs.REL_RAW_DIR}/{gcs.REL_RAW_SUBDIR}"
+    abs_raw_dir = f"{conf_vars.BASE_DIR}/{conf_vars.REL_RAW_DIR}/" \
+        f"{conf_vars.REL_RAW_SUBDIR}"
     filepaths = [
         f"{abs_raw_dir}/{filename}"
         for filename in filenames
@@ -151,18 +148,10 @@ def extract(gcs: GCS, spark: SparkSession, filenames: List[str]) \
         inferSchema=False
     )
 
-    if gcs.DEBUG_ENABLED:  # In Debug Mode, process a sample of the actual df
+    if conf_vars.DEBUG_ENABLED:  # In Debug Mode, process a sample of actual df
         spark_df = spark_df.limit(1000)
 
     sdf_count = get_row_count(spark_df, "extraction")
-
-    # Adapt the size of partitions to the total size of raw files
-    # Goal: a reduced partition size reduces executors memory pressure
-    TARGET_PARTITION_LENGTH = 200000  # rows
-    optimal_nb_partitions = int(sdf_count / TARGET_PARTITION_LENGTH)
-    MIN_NB_PARTITIONS = 10
-    optimal_nb_partitions = max(MIN_NB_PARTITIONS, optimal_nb_partitions)
-    spark_df = spark_df.repartition(optimal_nb_partitions)
 
     return spark_df, sdf_count
 
@@ -170,8 +159,8 @@ def extract(gcs: GCS, spark: SparkSession, filenames: List[str]) \
 def transform(
     sdf: DataFrame,
     sdf_fact_row_count: int,
-    args: argparse.Namespace,
-    gcs: GCS
+    arguments: argparse.Namespace,
+    conf_vars: CONF_VARS
 ) -> DataFrame:
     """
     3. Transformation: Feature Engineering
@@ -179,7 +168,7 @@ def transform(
 
     # Sub-functions
 
-    def clean_data(sdf_in: DataFrame, gcs: GCS) -> DataFrame:
+    def clean_data(sdf_in: DataFrame, conf_vars: CONF_VARS) -> DataFrame:
         """
         Data Cleaning
         Goal: remove sessions with multiple user_ids (cf. notebook §3.1.3)
@@ -192,11 +181,12 @@ def transform(
             .filter(f.col("count") > 1)
 
         sdf_out = sdf_in.join(sdf_dupl_sessions, "user_session", "left_anti")
-        print_task_completed(sdf_out, "cleaning", gcs)
+        print_task_status(sdf_out, "cleaning", conf_vars)
 
         return sdf_out
 
-    def get_features_per_product(sdf_in: DataFrame, gcs: GCS) -> DataFrame:
+    def get_features_per_product(sdf_in: DataFrame, conf_vars: CONF_VARS) \
+            -> DataFrame:
         """
         a) Attributes and features per product
         """
@@ -211,15 +201,16 @@ def transform(
                 f.max(was_purchased.cast("int")).alias("purchased"),
                 f.sum(was_viewed.cast("int")).alias("num_views_product")
             )
-        print_task_completed(
+        print_task_status(
             sdf_out,
             "calculation of features per product",
-            gcs
+            conf_vars
         )
 
         return sdf_out
 
-    def get_features_per_session(sdf_in: DataFrame, gcs: GCS) -> DataFrame:
+    def get_features_per_session(sdf_in: DataFrame, conf_vars: CONF_VARS) \
+            -> DataFrame:
         """
         b) Features per session
         """
@@ -260,10 +251,10 @@ def transform(
                 f.count("user_session").over(window_user)
             )
 
-        print_task_completed(
+        print_task_status(
             sdf_out,
             "calculation of features per session",
-            gcs
+            conf_vars
         )
 
         return sdf_out
@@ -271,7 +262,7 @@ def transform(
     def get_features_per_product_per_session(
             sdf_per_product: DataFrame,
             sdf_per_session: DataFrame,
-            gcs: GCS
+            conf_vars: CONF_VARS
     ) -> DataFrame:
         """
         c) Features per product per session
@@ -296,10 +287,10 @@ def transform(
             )
         )
 
-        print_task_completed(
+        print_task_status(
             sdf_out,
             "calculation of features per product & per session",
-            gcs
+            conf_vars
         )
 
         return sdf_out
@@ -307,10 +298,10 @@ def transform(
     # Body of "Transform" function
 
     logging.info("⚙️ Transforming data...")
-    date_start, date_stop = args.DATE_START, args.DATE_END
+    date_start, date_stop = arguments.DATE_START, arguments.DATE_END
 
     # 1. Clean Data
-    sdf = clean_data(sdf, gcs)
+    sdf = clean_data(sdf, conf_vars)
 
     # 2. Filter dates if arguments provided
     if date_start:
@@ -319,27 +310,26 @@ def transform(
     if date_stop:
         logging.info(f"📅 Filtering data until: {date_stop}")
         sdf = sdf.filter(f.col("event_time") <= date_stop)
-    print_task_completed(sdf, "applying date filters", gcs)
+    print_task_status(sdf, "applying date filters", conf_vars)
 
     # Optimization: Cache sdf since it's used as a source for two branches
     # But only if executors can cache the whole dataset along transformations
-    if sdf_fact_row_count < gcs.MAX_NB_CACHED_ROWS:  # empirical threshold
+    if sdf_fact_row_count < conf_vars.MAX_NB_CACHED_ROWS:
         sdf.persist()
 
     # 3. Get Features
-    sdf_per_product = get_features_per_product(sdf, gcs)
-    sdf_per_session = get_features_per_session(sdf, gcs)
+    sdf_per_product = get_features_per_product(sdf, conf_vars)
+    sdf_per_session = get_features_per_session(sdf, conf_vars)
+
     sdf_features = get_features_per_product_per_session(
         sdf_per_product,
         sdf_per_session,
-        gcs
+        conf_vars
     )
-    
+
     # 4. Final selection and cleanup
     sdf_transformed = sdf_features \
         .drop("temp_start_dt", "temp_end_dt")
-    
-    get_row_count(sdf_transformed, "transformation")
 
     return sdf_transformed
 
@@ -376,28 +366,38 @@ def load(sdf: DataFrame, output_path: str) -> None:
             logging.info(f"   • {file}")
 
 
+def get_optimal_nb_partitions(sdf_count: int) -> int:
+    # Adapt the size of partitions to the total size of raw files
+    # Goal: a reduced partition size reduces executors memory pressure
+    TARGET_PARTITION_LENGTH = 200000  # rows
+    optimal_nb_partitions = int(sdf_count / TARGET_PARTITION_LENGTH)
+    MIN_NB_PARTITIONS = 10
+    optimal_nb_partitions = max(MIN_NB_PARTITIONS, optimal_nb_partitions)
+    return optimal_nb_partitions
+
+
 def main() -> None:
 
     # 1. Initialize variables from config & arguments
-    # Gather all variables into Dataclass "gcs"
+    # Gather all variables into Dataclass "CONF_VARS"
 
     # Spark job uses config file placed in remote working dir
-    gcs, args = apply_config_values("config.ini", "Spark Job", None)
+    conf_vars, arguments = apply_config_values("config.ini", "Spark Job", None)
     # None: no Log file generation (Logging is handled by GC Dataproc)
 
     logging.info("🚀 Starting Spark Job")
 
     # 2. Verify presence of source files in Bucket
-    selected_files = list_files_to_process(args, gcs)
+    selected_files = list_files_to_process(arguments, conf_vars)
     for filename in selected_files:
-        file_found_in_bucket = search_file_in_bucket(gcs, filename)
+        file_found_in_bucket = search_file_in_bucket(conf_vars, filename)
         if not file_found_in_bucket:
             logging.error("❌ Source files aren't available.")
             sys.exit(1)
-    logging.info(f"✅ Source files available in Bucket:\n{gcs.filepaths}")
+    logging.info(f"✅ Source files available in Bucket:\n{conf_vars.filepaths}")
 
     # 3. Create Spark Session
-    spark = create_spark_session(gcs.PROJECT_ID)
+    spark = create_spark_session(conf_vars.PROJECT_ID)
 
     # 4. ETL Job
     logging.info("🚀 Starting ETL Job...")
@@ -405,21 +405,30 @@ def main() -> None:
     try:
         # 4.1. Extract
         sdf_fact_table, sdf_fact_row_count = extract(
-            gcs,
+            conf_vars,
             spark,
             selected_files
         )
 
         # 4.2. Transform
-        sdf_feature_table = transform(
+        sdf_feat_table = transform(
             sdf_fact_table,
             sdf_fact_row_count,
-            args,
-            gcs
+            arguments,
+            conf_vars
         )
+        # Cache feature table in memory
+        sdf_feat_table.cache()
+
+        # Get row count of feature table
+        sdf_feat_row_count = get_row_count(sdf_feat_table, "transformation")
+
+        # Repartition fact table to optimize processing
+        optimal_nb_partitions = get_optimal_nb_partitions(sdf_feat_row_count)
+        sdf_feat_table = sdf_feat_table.repartition(optimal_nb_partitions)
 
         # 4.3. Load
-        load(sdf_feature_table, args.DESTINATION)
+        load(sdf_feat_table, arguments.DESTINATION)
 
         logging.info("🏁 ETL Job Finished.")
 

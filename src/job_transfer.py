@@ -26,7 +26,7 @@ import requests  # check if source hyperlink is valid
 from typing import List, Tuple
 from datetime import datetime, timezone
 from google.cloud import storage_transfer_v1  # storage transfer to GCS
-from .lib_common import GCS, apply_config_values, \
+from .lib_common import CONF_VARS, apply_config_values, \
                         list_files_to_process, search_file_in_bucket
 
 
@@ -34,7 +34,7 @@ from .lib_common import GCS, apply_config_values, \
 
 
 def get_source_urls(
-        gcs: GCS,
+        conf_vars: CONF_VARS,
         files_to_process: List[str]
 ) -> Tuple[List[str], List[str]]:
     # Goal: get files "pending" or missing in the bucket
@@ -43,8 +43,8 @@ def get_source_urls(
     source_filenames = []
     for filename in files_to_process:
         # Check source is available in Bucket
-        file_found_in_bucket = search_file_in_bucket(gcs, filename)
-                
+        file_found_in_bucket = search_file_in_bucket(conf_vars, filename)
+
         # if gcs_file_pointer.exists():
         if file_found_in_bucket:
             logging.info(f"⏭️ File {filename} is already in Bucket")
@@ -52,11 +52,11 @@ def get_source_urls(
         else:
             logging.info(f"📝 File {filename} is pending")
 
-            if gcs.DEBUG_ENABLED:  # In Debug Mode, process a sample file
+            if conf_vars.DEBUG_ENABLED:  # In Debug Mode, process a sample file
                 filename = "sample.csv"
 
             # Check source is available in S3
-            url_base_path = gcs.SOURCE_URL_DIR
+            url_base_path = conf_vars.SOURCE_URL_DIR
             url_file = f"{url_base_path}/{filename}"
             logging.info(f"⏭️ Checking validity of link: {url_file}")
             response = requests.head(
@@ -74,13 +74,13 @@ def get_source_urls(
     return source_urls, source_filenames
 
 
-def create_tsv_file(gcs: GCS, tsv_contents: List[str]) -> str:
+def create_tsv_file(conf_vars: CONF_VARS, tsv_contents: List[str]) -> str:
     # Goal 1: List pending URLs in TSV file (as required by STS)
     # Goal 2: Upload TSV file to GCS Bucket & return its URL
 
     tsv_content = "TsvHttpData-1.0\n" + "\n".join(tsv_contents) + "\n"
     tsv_rel_file_path = "tsv/aws_pending_urls.tsv"
-    tsv_pointer = gcs.bucket.blob(tsv_rel_file_path)
+    tsv_pointer = conf_vars.bucket.blob(tsv_rel_file_path)
     tsv_pointer.upload_from_string(
         tsv_content,
         content_type="text/tab-separated-values",
@@ -88,17 +88,19 @@ def create_tsv_file(gcs: GCS, tsv_contents: List[str]) -> str:
     )
 
     # Get URL to TSV file in GCS Bucket
-    tsv_url = f"{gcs.API_URL}/{gcs.BUCKET_NAME}/{tsv_rel_file_path}"
+    tsv_url = f"{conf_vars.API_URL}/{conf_vars.BUCKET_NAME}/" \
+        f"{tsv_rel_file_path}"
     logging.info(f"Created list of URLs to download at: {tsv_url}")
 
     return tsv_url
 
 
-def define_transfer_job(gcs: GCS, tsv_url: str) -> Tuple[str, dict]:
+def define_transfer_job(conf_vars: CONF_VARS, tsv_url: str) \
+        -> Tuple[str, dict]:
     """
     Goal 1: Define the Transfer Job to be submitted to STS
     Goal 2: Automatically create Google-managed STS account (Master node)
-  
+
     """
     # Set Job's unique timestamped name
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
@@ -109,7 +111,7 @@ def define_transfer_job(gcs: GCS, tsv_url: str) -> Tuple[str, dict]:
     logging.info(f"⏭️ Defining Transfer Job: {job_name} ...")
     job_definition = {
         "name": job_name,
-        "project_id": gcs.PROJECT_ID,
+        "project_id": conf_vars.PROJECT_ID,
         "status": "ENABLED",  # so job waits for permissions
         "description": "Cloud-Transfer of Raw Files",
         "transfer_spec": {
@@ -117,8 +119,8 @@ def define_transfer_job(gcs: GCS, tsv_url: str) -> Tuple[str, dict]:
                 "list_url": tsv_url,  # ************* Source
             },
             "gcs_data_sink": {
-                "bucket_name": gcs.BUCKET_NAME,  # Destination
-                "path": gcs.REL_RAW_DIR + "/"
+                "bucket_name": conf_vars.BUCKET_NAME,  # Destination
+                "path": conf_vars.REL_RAW_DIR + "/"
             }
         }
     }
@@ -127,7 +129,7 @@ def define_transfer_job(gcs: GCS, tsv_url: str) -> Tuple[str, dict]:
 
 
 def run_transfer_job(
-        gcs: GCS,
+        conf_vars: CONF_VARS,
         job_name: str,
         job_definition:
         dict
@@ -141,12 +143,12 @@ def run_transfer_job(
     |Storage Transfer User      |Service|User   |Transfer-Master|Manage job   |
     |Storage Admin              |Service|Google |Transfer-Worker|Perform job  |
     |---------------------------|-------|-------|---------------|-------------|
-    Cf. setup_data_services.sh where these roles were granted. 
+    Cf. setup_data_services.sh where these roles were granted.
     """
 
     logging.info("✅ Grant Transfer permissions to Master via credentials")
     master_client = storage_transfer_v1.StorageTransferServiceClient(
-        credentials=gcs.CREDENTIALS
+        credentials=conf_vars.CREDENTIALS
     )
 
     logging.info("⏭️ Create Transfer Job ")
@@ -160,13 +162,17 @@ def run_transfer_job(
     master_client \
         .run_transfer_job({
             "job_name": job_name,
-            "project_id": gcs.PROJECT_ID
+            "project_id": conf_vars.PROJECT_ID
         })
 
     return master_client, job_name
 
 
-def monitor_transfer(gcs: GCS, master_client: dict, job_name: str) -> None:
+def monitor_transfer(
+        conf_vars: CONF_VARS,
+        master_client: dict,
+        job_name: str
+        ) -> None:
     # Monitor progress of transfer operations
 
     from google.protobuf.json_format import MessageToDict
@@ -181,7 +187,7 @@ def monitor_transfer(gcs: GCS, master_client: dict, job_name: str) -> None:
             transfer_job_updated = master_client \
                 .get_transfer_job({
                     "job_name": job_name,
-                    "project_id": gcs.PROJECT_ID
+                    "project_id": conf_vars.PROJECT_ID
                 })
 
             # Get current operation status
@@ -201,20 +207,20 @@ def monitor_transfer(gcs: GCS, master_client: dict, job_name: str) -> None:
 
                 if not current_operation.done:
                     # Phase 2. Execution
-                    
+
                     # Show progression percentage if available
                     if current_operation.metadata:
-                        s_bytes_loaded = counters.get("bytesCopiedToSink", 0)
-                        s_bytes_total = counters.get("bytesFoundFromSource", 0)
-                        counters_are_valid = (s_bytes_loaded and s_bytes_total)
+                        bytes_loaded = counters.get("bytesCopiedToSink")
+                        bytes_total = counters.get("bytesFoundFromSource")
+                        counters_are_valid = (bytes_loaded and bytes_total)
                         if not counters_are_valid:
                             logging.info("Transfer in progress: ... ⏳")
                         else:
-                            ratio = int(s_bytes_loaded) / int(s_bytes_total)
-                            total_MB = int(s_bytes_total) / 1024 / 1024
+                            ratio = int(bytes_loaded) / int(bytes_total)
+                            total_MB = int(bytes_total) / 1024 / 1024
                             s_stats = f"{ratio*100:.1f}% of {total_MB:.1f} MB"
                             logging.info(f"Transfer in progress: {s_stats} ⏳")
-                            
+
                 else:
                     # Phase 3. Conclusion
                     logging.info("✅ Transfer completed!")
@@ -231,10 +237,10 @@ def monitor_transfer(gcs: GCS, master_client: dict, job_name: str) -> None:
 def main() -> None:
     try:
         step = "1. Initialize variables from config & arguments"
-        # Gather all variables into Dataclass "gcs"
+        # Gather all variables into Dataclass "CONF_VARS"
 
         # Transfer job uses config file from local dir
-        gcs, args = apply_config_values(
+        conf_vars, arguments = apply_config_values(
             "src/config.ini",
             "Transfer Job",
             "job_transfer.log"
@@ -244,13 +250,13 @@ def main() -> None:
 
         step = "2. Get Input Filenames"
         files_to_process = list_files_to_process(
-            args,
-            gcs
+            arguments,
+            conf_vars
         )
 
         step = "3. Get Pending Files"
         source_urls, source_filenames = get_source_urls(
-            gcs,
+            conf_vars,
             files_to_process
         )
 
@@ -258,19 +264,19 @@ def main() -> None:
 
             step = "4. Create TSV File"
             tsv_url = create_tsv_file(
-                gcs,
+                conf_vars,
                 source_urls
             )
 
             step = "5. Define Transfer Job"
             job_name, job_definition = define_transfer_job(
-                gcs,
+                conf_vars,
                 tsv_url
             )
 
             step = "6. Run Transfer Job"
             master_client, job_name = run_transfer_job(
-                gcs,
+                conf_vars,
                 job_name,
                 job_definition
             )
@@ -278,13 +284,15 @@ def main() -> None:
             step = "7. Monitor progress of Transfer Job"
             logging.info(f"List of files to transfer: {source_filenames}")
             monitor_transfer(
-                gcs,
+                conf_vars,
                 master_client,
                 job_name
             )
 
         logging.info("🏁 Transfer Job Finished.")
-        logging.info(f"⏭️ Available files in GCS storage:\n{gcs.filepaths}")
+        filepaths_str = '\n'.join(conf_vars.filepaths)
+        logging.info(f"⏭️ Available files in GCS storage:\n{filepaths_str}")
+
         return
 
     except Exception as e:

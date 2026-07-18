@@ -1,4 +1,16 @@
+"""
+Goal: Shared utilities for GCS-based ETL pipelines (Transfer + Spark jobs).
+
+Key features:
+- Configuration parsing from INI files and CLI args (argparse)
+- Dataclass (CONF_VARS) holding GCS client, bucket, paths & runtime flags
+- GCS file discovery: existence check and month-range filename generation
+- Centralized logging setup with console (color-coded) + optional file output
+- Credentials via google.auth.default() for Transfer job
+"""
+
 import os
+import sys
 import argparse
 import configparser
 import logging
@@ -15,7 +27,7 @@ from typing import List, Tuple, Optional
 
 
 @dataclass
-class GCS:
+class CONF_VARS:
     PROJECT_ID: str
     CREDENTIALS: google.auth.credentials.Credentials
     BUCKET_NAME: str
@@ -33,11 +45,11 @@ class GCS:
     DEBUG_ENABLED: bool
 
 
-def get_gcs_dict(config_ini: configparser.ConfigParser) -> dict:
-    # Goal: Initialize GCS object from dictionary
-    
-    logging.info("Initializing GCS object from dictionary...")
-    gcs_dict = {
+def get_dict_conf(config_ini: configparser.ConfigParser) -> dict:
+    # Goal: Initialize CONF_VARS object from dictionary
+
+    logging.info("Initializing CONF_VARS object from dictionary...")
+    dict_conf = {
         "BUCKET_NAME": config_ini.get("STORAGE", "BUCKET_NAME"),
         "REL_RAW_DIR": config_ini.get("STORAGE", "REL_RAW_DIR"),
         "ABS_RAW_DIR": "",
@@ -45,22 +57,23 @@ def get_gcs_dict(config_ini: configparser.ConfigParser) -> dict:
         "API_URL": "https://storage.googleapis.com",
         "ARG_DATE_FORMAT": config_ini.get("STORAGE", "DATE_FORMAT"),
         "SOURCE_URL_DIR": config_ini.get("STORAGE", "SOURCE_URL_DIR"),
-        "MAX_NB_CACHED_ROWS": int(config_ini.get("SPARK", "MAX_NB_CACHED_ROWS")),
+        "MAX_NB_CACHED_ROWS": config_ini.getint("SPARK", "MAX_NB_CACHED_ROWS"),
         "filepaths": [],
-        "DEBUG_ENABLED": config_ini.get("GENERAL", "DEBUG_ENABLED")
+        "DEBUG_ENABLED": config_ini.getboolean("GENERAL", "DEBUG_ENABLED")
     }
 
-    gcs_dict["CREDENTIALS"], gcs_dict["PROJECT_ID"] = google.auth.default()
-    gcs_dict["BASE_DIR"] = "gs://" + gcs_dict["BUCKET_NAME"]
-    gcs_dict["bucket"] = gcs_dict["storage"].bucket(gcs_dict["BUCKET_NAME"])
-    gcs_dict["REL_RAW_SUBDIR"] = gcs_dict["SOURCE_URL_DIR"].lstrip("https://")
+    dict_conf["CREDENTIALS"], dict_conf["PROJECT_ID"] = google.auth.default()
+    dict_conf["BASE_DIR"] = f"gs://{dict_conf['BUCKET_NAME']}"
+    dict_conf["bucket"] = dict_conf["storage"].bucket(dict_conf["BUCKET_NAME"])
+    dict_conf["REL_RAW_SUBDIR"] = dict_conf["SOURCE_URL_DIR"] \
+        .lstrip("https://")
 
-    return gcs_dict
+    return dict_conf
 
 
-def parse_args(
+def parse_arguments(
     config_ini: configparser.ConfigParser,
-    gcs: GCS,
+    conf_vars: CONF_VARS,
     script_description: str
 ) -> argparse.Namespace:
     # Goal:
@@ -70,11 +83,11 @@ def parse_args(
     logging.info("Parsing arguments...")
 
     # Read default values from config_ini file
-    deft_raw_dir = gcs.REL_RAW_DIR
+    deft_raw_dir = conf_vars.REL_RAW_DIR
     deft_start_date = config_ini.get("SPARK", "DATE_START")
     deft_end_date = config_ini.get("SPARK", "DATE_END")
     DATE_FORMAT = config_ini.get("GENERAL", "HELP_DATE_FORMAT")
-    deft_out_dir = gcs.BASE_DIR + "/" + \
+    deft_out_dir = conf_vars.BASE_DIR + "/" + \
         config_ini.get("SPARK", "REL_PROCESSED_DIR")
 
     # Function to correct path arguments
@@ -110,25 +123,25 @@ def parse_args(
         default=deft_end_date,
         help=f"End date ({DATE_FORMAT} default: {deft_end_date})"
     )
-    args = parser.parse_args()
+    arguments = parser.parse_args()
 
     # Summary List of Active Parameters
     logging.info("🔧 Active Parameters:")
-    args_dict = vars(args)
+    arguments_dict = vars(arguments)
     if "spark" in script_description.lower():
-        deft_raw_dir = f"{deft_raw_dir}/{gcs.REL_RAW_SUBDIR}"
-    [logging.info(f"  • {key}: {val}") for key, val in args_dict.items()]
+        deft_raw_dir = f"{deft_raw_dir}/{conf_vars.REL_RAW_SUBDIR}"
+    [logging.info(f"  • {key}: {val}") for key, val in arguments_dict.items()]
 
-    return args
+    return arguments
 
 
 def apply_config_values(
         config_path: str,
         script_description: str,
         logfile_name: Optional[str] = None
-) -> Tuple[GCS, argparse.Namespace]:
-    # Apply config_ini variables to Dataclass "gcs" and to parsed arguments
-    print("Applying config_ini variables...")
+) -> Tuple[CONF_VARS, argparse.Namespace]:
+    # Apply variables from config_ini to Dataclass & to parsed arguments
+    print("Applying variables from config_ini...")
 
     # Read configuration file
     config_ini = configparser.ConfigParser()
@@ -138,49 +151,50 @@ def apply_config_values(
     setup_logging(config_ini, script_description, logfile_name)
 
     # Create an intermediate variable for instanciation
-    gcs_dict = get_gcs_dict(config_ini)
+    dict_conf = get_dict_conf(config_ini)
 
     # Instanciation
-    gcs = GCS(**gcs_dict)
+    conf_vars = CONF_VARS(**dict_conf)
 
     # Parse Arguments
-    args = parse_args(config_ini, gcs, script_description)
+    arguments = parse_arguments(config_ini, conf_vars, script_description)
 
-    # Update GCS with parsed args
-    gcs.REL_RAW_DIR = args.REL_RAW_DIR
-    gcs.ABS_RAW_DIR = f"{gcs.BASE_DIR}/{gcs.REL_RAW_DIR}"
+    # Update CONF_VARS with parsed arguments
+    conf_vars.REL_RAW_DIR = arguments.REL_RAW_DIR
+    conf_vars.ABS_RAW_DIR = f"{conf_vars.BASE_DIR}/{conf_vars.REL_RAW_DIR}"
 
-    return gcs, args
+    return conf_vars, arguments
 
 # _____________________________ Raw Files _________________
 
 
-def search_file_in_bucket(gcs: GCS, filename: str) -> bool:
+def search_file_in_bucket(conf_vars: CONF_VARS, filename: str) -> bool:
     # Goal: check if source raw file is available in GCS Bucket
 
-    gcs_file_rel_path = f"{gcs.REL_RAW_DIR}/{gcs.REL_RAW_SUBDIR}/{filename}"
-    gcs_file_abs_path = f"{gcs.BASE_DIR}/{gcs_file_rel_path}"
+    gcs_file_rel_path = \
+        f"{conf_vars.REL_RAW_DIR}/{conf_vars.REL_RAW_SUBDIR}/{filename}"
+    gcs_file_abs_path = f"{conf_vars.BASE_DIR}/{gcs_file_rel_path}"
     logging.info(f"⏭️ Looking in Bucket for: {gcs_file_abs_path}")
-    gcs_file_pointer = gcs.bucket.blob(gcs_file_rel_path)
+    gcs_file_pointer = conf_vars.bucket.blob(gcs_file_rel_path)
     file_found_in_bucket = gcs_file_pointer.exists()
 
     # Prepare list of GCS filepaths to be processed by Spark job
-    gcs.filepaths.append(gcs_file_abs_path)
+    conf_vars.filepaths.append(gcs_file_abs_path)
 
     return file_found_in_bucket
 
 
 def list_files_to_process(
-        args: argparse.Namespace,
-        gcs: GCS) -> List[str]:
+        arguments: argparse.Namespace,
+        conf_vars: CONF_VARS) -> List[str]:
     # Goal: Get list of files to process from the input date range
 
     # Convert date strings to datetime
-    date_format = gcs.ARG_DATE_FORMAT
+    date_format = conf_vars.ARG_DATE_FORMAT
 
     try:
-        start_dt = datetime.strptime(args.DATE_START, date_format)
-        end_dt = datetime.strptime(args.DATE_END, date_format)
+        start_dt = datetime.strptime(arguments.DATE_START, date_format)
+        end_dt = datetime.strptime(arguments.DATE_END, date_format)
     except ValueError as e:
         raise ValueError(f"Invalid date format: {e}")
     if start_dt > end_dt:
@@ -195,7 +209,7 @@ def list_files_to_process(
         filenames.append(filename)  # Ex. 2026-Jan.csv
         temp_dt += relativedelta(months=1)  # increments to next month
 
-    if gcs.DEBUG_ENABLED:  # In Debug Mode, process a sample file
+    if conf_vars.DEBUG_ENABLED:  # In Debug Mode, process a sample file
         filenames = ["sample.csv"]
 
     return filenames
@@ -204,30 +218,28 @@ def list_files_to_process(
 # _____________________________ Logging _________________
 
 def setup_logging(
-        config_vars: configparser.ConfigParser,
+        conf_vars: configparser.ConfigParser,
         script_description: str,
         logfile_name: Optional[str] = None
 ) -> None:
     """
-    Setup logging from environment variables.
+    Setup logging from config.ini
     Outputs to:
-     - console
-        - text in green
-     - LOG_FILE
-        - optional
-        - in append mode
+     1. console  (text in green for Transfer job)
+     2. LOG_FILE is optional & in append mode
     """
 
     print(f"Setting up Logging for {script_description}")
 
     # Set Log Level
-    level = config_vars.get("LOGGING", "LOG_LEVEL", fallback="INFO")
+    level = conf_vars.get("LOGGING", "LOG_LEVEL", fallback="INFO")
 
     # Set Log-to-Console Handler
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
+    # Redirect messages to stdout (default is stderr)
 
     # Set Log-to-Console Formatter
-    basic_format = config_vars.get("LOGGING", "LOG_FORMAT")
+    basic_format = conf_vars.get("LOGGING", "LOG_FORMAT")
     if "spark" in script_description.lower():
         # Case of Spark Job
         custom_formatter = logging.Formatter(
@@ -247,7 +259,7 @@ def setup_logging(
     handlers = [console_handler]
 
     # Set Log-to-File Handler
-    log_dir = config_vars.get("LOGGING", "LOG_DIR", fallback=None)
+    log_dir = conf_vars.get("LOGGING", "LOG_DIR", fallback=None)
     if log_dir and logfile_name:
         # Create log directory if it doesn't exist
         Path(log_dir).mkdir(exist_ok=True)
