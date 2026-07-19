@@ -149,7 +149,7 @@ def extract(conf_vars: CONF_VARS, spark: SparkSession, filenames: List[str]) \
     )
 
     if conf_vars.DEBUG_ENABLED:  # In Debug Mode, process a sample of actual df
-        spark_df = spark_df.limit(1000)
+        spark_df = spark_df.limit(10000)
 
     sdf_count = get_row_count(spark_df, "extraction")
 

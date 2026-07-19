@@ -163,6 +163,12 @@ def apply_config_values(
     conf_vars.REL_RAW_DIR = arguments.REL_RAW_DIR
     conf_vars.ABS_RAW_DIR = f"{conf_vars.BASE_DIR}/{conf_vars.REL_RAW_DIR}"
 
+    # Check parsed argument DESTINATION is a subdir of Bucket
+    bucket_from_path = arguments.DESTINATION.split("/")[2]
+    if not (bucket_from_path == conf_vars.BUCKET_NAME):
+        logging.error("❌ Argument DESTINATION is not a subdir of Bucket.")
+        sys.exit(1)
+
     return conf_vars, arguments
 
 # _____________________________ Raw Files _________________
@@ -235,8 +241,7 @@ def setup_logging(
     level = conf_vars.get("LOGGING", "LOG_LEVEL", fallback="INFO")
 
     # Set Log-to-Console Handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    # Redirect messages to stdout (default is stderr)
+    console_handler = logging.StreamHandler()
 
     # Set Log-to-Console Formatter
     basic_format = conf_vars.get("LOGGING", "LOG_FORMAT")
@@ -247,9 +252,9 @@ def setup_logging(
         )
     else:
         # Case of Transfer Job
-        color_green = "\033[92m"  # ANSI color code
+        color_cyan = "\033[96m"  # ANSI color code
         color_reset = "\033[0m"
-        custom_format = f"{color_green}{basic_format}{color_reset}"
+        custom_format = f"{color_cyan}{basic_format}{color_reset}"
         custom_formatter = logging.Formatter(
             fmt=custom_format
         )

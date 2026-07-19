@@ -51,6 +51,36 @@ Usage: $0 -f <START_PHASE> [-s <DATE_START>] [-e <DATE_END>] [-d '<DESTINATION>'
 HELP_TEXT_END
 )
 
+# __________________________ Debug Functions ______________________
+
+echo_color() {  
+    # Print Log messages in green
+    
+    LOG_MESSAGE=$1  
+    YELLOW_COLOR='\033[1;33m'
+    NO_COLOR='\033[0m' # No Color (Reset)
+    echo -e "${YELLOW_COLOR}${LOG_MESSAGE}${NO_COLOR}"
+}
+print_phase() {
+    # Add a horizontal bar to phase subtitle
+
+    BAR="========================="
+    echo_color "${BAR} $1 ${BAR}"
+}
+
+run_command(){  
+    # Run command, display it & exit on errors
+    COMMAND_STRING="$*"
+    echo_color "$COMMAND_STRING"
+    eval "$COMMAND_STRING"
+
+    COMMAND_RETURN_CODE=$?
+    if [ $COMMAND_RETURN_CODE -ne 0 ]; then
+        echo_color "❌ Exit on error." >&2
+        exit 1
+    fi
+}
+
 # _________________________ Log File Setup __________________________ 
 
 LOG_DIR=`grep "^LOG_DIR =" ./src/config.ini | cut -d" " -f 3`
@@ -58,10 +88,10 @@ mkdir -p ${LOG_DIR}
 SUFFIX=$(date +"%Y%m%d_%H%M")
 LOG_FILE="${LOG_DIR}/run_all_scripts_${SUFFIX}.log"
 
-# Change Shell output to both: console & log file
+# Redirect Shell output to both: console & log file
 ESCAPE_CHAR=$'\x1b'
 COLOR_CODE_REGEX="${ESCAPE_CHAR}\[[0-9;]*m"  # Font color code to omit in log file
-exec > >(tee >(sed -r "s/$COLOR_CODE_REGEX//g" >> "$LOG_FILE")) # 2>&1
+exec > >(tee >(sed -r "s/$COLOR_CODE_REGEX//g" >> "$LOG_FILE")) 2>&1
 # "exec > X" = Redirect 1 (stdout) to X
 # ">(...)" = stdout is redirected to a command not to a file
 # "sed -r '...'" = Removes the font color codes as regexp from stdout messages  
@@ -71,7 +101,7 @@ exec > >(tee >(sed -r "s/$COLOR_CODE_REGEX//g" >> "$LOG_FILE")) # 2>&1
 # _________________________ Parse Arguments __________________________ 
 
 START_PHASE="1"  # Run all scripts by default
-# Cf. config.ini for other default values
+# Cf. config.ini for other default argument values
 
 JOB_ARGS=""
 
@@ -119,35 +149,14 @@ for VAR_NAME in START_PHASE DATE_START DATE_END DESTINATION; do
     fi
 done
 
-# __________________________ Debug Functions ______________________
+# Check argument "destination" is a subdir of Bucket
+BUCKET_NAME=`grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3`
+BUCKET_FROM_PATH=$(echo "$DESTINATION" | cut -d'/' -f3)
+if [ "X$BUCKET_FROM_PATH" != "X$BUCKET_NAME" ]; then
+    echo_color "❌ Argument DESTINATION is not a subdir of Bucket."
+    exit 1
+fi
 
-echo_color() {  
-    # Print Log messages in green
-    
-    LOG_MESSAGE=$1  
-    YELLOW_COLOR='\033[1;33m'
-    NO_COLOR='\033[0m' # No Color (Reset)
-    echo -e "${YELLOW_COLOR}${LOG_MESSAGE}${NO_COLOR}"
-}
-print_phase() {
-    # Add a horizontal bar to phase subtitle
-
-    BAR="========================="
-    echo_color "${BAR} $1 ${BAR}"
-}
-
-run_command(){  
-    # Run command, display it & exit on errors
-    COMMAND_STRING="$*"
-    echo_color "$COMMAND_STRING"
-    eval "$COMMAND_STRING"
-
-    COMMAND_RETURN_CODE=$?
-    if [ $COMMAND_RETURN_CODE -ne 0 ]; then
-        echo_color "❌ Exit on error." >&2
-        exit 1
-    fi
-}
 
 # _________________________ Main Execution __________________________ 
 
@@ -185,7 +194,6 @@ fi
 print_phase "Phase 4) Run Spark Job"
 # ETL-Process of raw files in GCS Bucket using Spark
 
-BUCKET_NAME=`grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3`
 GCS_PATH="gs://${BUCKET_NAME}"
 
 # Upload required files to GCS Bucket:
