@@ -26,3 +26,11 @@ ToDo:
 Done
 add timestamp to log messages
 add return code to main if error
+
+
+Blacklisted users without required permissions:
+sandbox-user-537710462689@blent-labs.com
+
+
+gcloud storage buckets add-iam-policy-binding gs://blent_spark_bucket7     --member=serviceAccount:project-21369443646@storage-transfer-service.iam.gserviceaccount.com     --role=roles/storage.admin
+ERROR: (gcloud.storage.buckets.add-iam-policy-binding) HTTPError 400: Service account project-21369443646@storage-transfer-service.iam.gserviceaccount.com does not exist.

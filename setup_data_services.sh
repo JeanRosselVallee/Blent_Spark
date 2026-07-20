@@ -110,7 +110,7 @@ eval "$COMMAND"  # Non-essential command, won't exit on error if bucket exists
 # Exit if Bucket name is unavailable (taken already by someone else)
 BUCKET_NAME_TAKEN=`eval "$COMMAND" 2>&1 | grep "not available"`
 if [ "X$BUCKET_NAME_TAKEN" != "X" ]; then 
-    print "❌ Exit on error: Change the Bucket's name in config.ini." >&2
+    print "❌ Error: Unavailable Bucket's name in GCS, update config.ini." >&2
     exit 1
 fi
 

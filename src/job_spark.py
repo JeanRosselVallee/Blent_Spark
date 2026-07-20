@@ -43,7 +43,6 @@ import argparse
 from gcsfs import GCSFileSystem
 from pyspark.sql import SparkSession, Window, DataFrame
 from pyspark.sql import functions as f
-from pyspark.sql.types import StructType, StructField, StringType
 from typing import List, Tuple
 from lib_common import CONF_VARS, apply_config_values, \
                         list_files_to_process, search_file_in_bucket
@@ -110,22 +109,6 @@ def print_task_status(sdf_in: DataFrame, step_name: str, conf_vars: CONF_VARS):
         get_row_count(sdf_in, step_name)
 
 
-def get_schema() -> StructType:
-
-    schema = StructType([
-        StructField("event_time", StringType(), True),
-        StructField("event_type", StringType(), True),
-        StructField("product_id", StringType(), True),
-        StructField("category_id", StringType(), True),
-        StructField("category_code", StringType(), True),
-        StructField("brand", StringType(), True),
-        StructField("price", StringType(), True),
-        StructField("user_id", StringType(), True),
-        StructField("user_session", StringType(), True)
-    ])
-    return schema
-
-
 def extract(conf_vars: CONF_VARS, spark: SparkSession, filenames: List[str]) \
         -> Tuple[DataFrame, int]:
     """
@@ -145,11 +128,12 @@ def extract(conf_vars: CONF_VARS, spark: SparkSession, filenames: List[str]) \
     spark_df = spark.read.csv(
         filepaths,
         header=True,
-        inferSchema=False
+        inferSchema=False  # all fields are read as strings
+        # schema=get_schema()  # type checking slows down execution
     )
 
     if conf_vars.DEBUG_ENABLED:  # In Debug Mode, process a sample of actual df
-        spark_df = spark_df.limit(10000)
+        spark_df = spark_df.limit(1_000_000)
 
     sdf_count = get_row_count(spark_df, "extraction")
 
@@ -399,8 +383,8 @@ def main() -> None:
     # 3. Create Spark Session
     spark = create_spark_session(conf_vars.PROJECT_ID)
 
-    # 4. ETL Job
-    logging.info("🚀 Starting ETL Job...")
+    # 4. ETL
+    logging.info("🚀 Starting ETL...")
     exception_caught = 0
     try:
         # 4.1. Extract
@@ -430,7 +414,7 @@ def main() -> None:
         # 4.3. Load
         load(sdf_feat_table, arguments.DESTINATION)
 
-        logging.info("🏁 ETL Job Finished.")
+        logging.info("🏁 Spark Job Finished.")
 
     except Exception as e:
         logging.error(f"❌ ETL Job Failed: {e}")

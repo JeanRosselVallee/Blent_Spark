@@ -69,11 +69,15 @@ print_phase() {
 }
 
 run_command(){  
-    # Run command, display it & exit on errors
+    # Display command
     COMMAND_STRING="$*"
     echo_color "$COMMAND_STRING"
-    eval "$COMMAND_STRING"
 
+    # Run command & get its execution time in seconds (%0R: no decimals)
+    TIMEFORMAT="Current phase's execution time: ***** %0R sec. *****"
+    eval "time $COMMAND_STRING"
+
+    # Exit on error
     COMMAND_RETURN_CODE=$?
     if [ $COMMAND_RETURN_CODE -ne 0 ]; then
         echo_color "❌ Exit on error." >&2
