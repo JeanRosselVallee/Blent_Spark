@@ -74,7 +74,7 @@ run_command(){
     echo_color "$COMMAND_STRING"
 
     # Run command & get its execution time in seconds (%0R: no decimals)
-    TIMEFORMAT="Current phase's execution time: ***** %0R sec. *****"
+    TIMEFORMAT="⏱️  ${YELLOW_COLOR}Phase completed in 🔸🔸%0R sec.🔸🔸${NO_COLOR}"
     eval "time $COMMAND_STRING"
 
     # Exit on error
@@ -104,6 +104,9 @@ exec > >(tee >(sed -r "s/$COLOR_CODE_REGEX//g" >> "$LOG_FILE")) 2>&1
 
 # _________________________ Parse Arguments __________________________ 
 
+# Display the command line that invoked this script
+echo_color "Invoked command: $0 $*"
+
 START_PHASE="1"  # Run all scripts by default
 # Cf. config.ini for other default argument values
 
@@ -111,8 +114,8 @@ JOB_ARGS=""
 
 # Check that a value is provided for each argument
 if  [ `expr $# % 2` -ne 0 ]; then
-    echo "Missing value in the arguments."
-    echo "${HELP_TEXT}"
+    echo_color "Missing value in the arguments."
+    echo_color "${HELP_TEXT}"
     exit 1
 fi
 
@@ -138,7 +141,7 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         *)
-            echo "$HELP_TEXT"
+            echo_color "$HELP_TEXT"
             exit 1
             exit 0
             ;;
@@ -149,7 +152,7 @@ done
 for VAR_NAME in START_PHASE DATE_START DATE_END DESTINATION; do
     VAR_VALUE=$(eval "echo \$$VAR_NAME")
     if [ "X$VAR_VALUE" != "X" ]; then
-        echo "$VAR_NAME: $VAR_VALUE"
+        echo_color "$VAR_NAME: $VAR_VALUE"
     fi
 done
 
@@ -157,7 +160,7 @@ done
 BUCKET_NAME=`grep "^BUCKET_NAME =" ./src/config.ini | cut -d" " -f 3`
 BUCKET_FROM_PATH=$(echo "$DESTINATION" | cut -d'/' -f3)
 if [ "X$BUCKET_FROM_PATH" != "X$BUCKET_NAME" ]; then
-    echo_color "❌ Argument DESTINATION is not a subdir of Bucket."
+    echo_color "❌ Argument DESTINATION is not based in Bucket ${BUCKET_NAME}."
     exit 1
 fi
 
